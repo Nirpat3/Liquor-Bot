@@ -92,9 +92,9 @@ class WebAutomationBot:
            # might already be logged in if using saved auth
            logger.info("Login form not found - might already be logged in")
    
-   async def order_item(self, item_number: int):
+   async def order_item(self, item_number: int, quantity: int):
        # function to navigate and order items
-       logger.info(f"Starting order process for item #{item_number}...")
+       logger.info(f"Starting order process for item #{item_number} with quantity {quantity}...")
        
        # clicks on add/view retail orders
        logger.info("Clicking Add/View Retail Orders...")
@@ -137,14 +137,69 @@ class WebAutomationBot:
        # wait for page to load/update after pressing Enter
        await self.page.wait_for_load_state('networkidle')
        
+       # read available quantity
+       try:
+           available_text = await self.page.text_content('span[id="fgvt_Dm-m-1"]')
+           # remove comma and convert to int
+           available_quantity = int(available_text.replace(',', ''))
+           logger.info(f"Available quantity: {available_quantity}")
+           
+           # adjust quantity if needed
+           if quantity > available_quantity:
+               # set quantity to 70% of available
+               adjusted_quantity = int(available_quantity * 0.7)
+               logger.info(f"Requested quantity {quantity} exceeds available. Adjusting to 70% of available: {adjusted_quantity}")
+               quantity = adjusted_quantity
+           else:
+               logger.info(f"Requested quantity {quantity} is available")
+               
+       except Exception as e:
+           logger.warning(f"Could not read available quantity: {e}")
+           # continue with original quantity if can't read available
+       
+       # TODO: Add code here to input the quantity into the appropriate field
+       # await self.page.fill('input[id="quantity_field_id"]', str(quantity))
+       
        # clicking add item button
        logger.info("Clicking Add Item button...")
        await self.page.click('span:has-text("Add Item")')
        
        # wait for page to load/update after adding item
        await self.page.wait_for_load_state('networkidle')
-       logger.info(f"Item {item_number} added successfully")
+       logger.info(f"Item {item_number} with quantity {quantity} added successfully")
        
+       # input the quantity into the quantity field
+       logger.info(f"Entering quantity: {quantity}")
+       await self.page.fill('input[id="Dm_1-81"]', str(quantity))
+       
+       # hit ok button
+       logger.info("Clicking OK button...")
+       await self.page.click('button[data-event="AcceptDocModal"]')
+       
+       # click Next button
+       logger.info("Clicking Next button...")
+       await self.page.click('span.ActionButtonCaptionText:has-text("Next")')
+       
+       # wait for page to load
+       await self.page.wait_for_load_state('networkidle')
+       
+       # click Next button on the next page
+       logger.info("Clicking Next button on second page...")
+       await self.page.click('span.ActionButtonCaptionText:has-text("Next")')
+       
+       # wait for page to load
+       await self.page.wait_for_load_state('networkidle')
+       
+       # click Next button on the next page
+       logger.info("Clicking Next button on second page...")
+       await self.page.click('span.ActionButtonCaptionText:has-text("Next")')
+       
+       # wait for page to load
+       await self.page.wait_for_load_state('networkidle')
+       
+       # click Submit button on the next page
+       logger.info("Clicking Next button on second page...")
+       #await self.page.click('span.ActionButtonCaptionText:has-text("Submit")')
    
    async def save_auth_state(self):
        # save the authentication state for future runs
@@ -165,9 +220,10 @@ async def main():
    # run setup (use_saved_auth=True by default, set to False for first run)
    await bot.setup(use_saved_auth=True)
    
-   # order an item for test
+   # order an item for now
    item_to_order = 38178
-   await bot.order_item(item_to_order)
+   quantity_to_order = 100
+   await bot.order_item(item_to_order, quantity_to_order)
    
    # wait to see the result
    await asyncio.sleep(5)
