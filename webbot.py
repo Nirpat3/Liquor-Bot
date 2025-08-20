@@ -51,6 +51,20 @@ class WebAutomationBot:
        # wait for page to load
        await self.page.wait_for_load_state('networkidle')
        
+       # check for session message button and click if exists
+       try:
+           # check if "Click Here to Start Over" button exists
+           start_over_button = await self.page.wait_for_selector('a:has-text("Click Here to Start Over")', timeout=3000)
+           if start_over_button:
+               logger.info("Session message found, clicking Start Over...")
+               await self.page.click('a:has-text("Click Here to Start Over")')
+               # wait for page to reload after clicking
+               await self.page.wait_for_load_state('networkidle')
+               logger.info("Session cleared, proceeding to login...")
+       except:
+           # button not found, continue normally
+           logger.info("No session message, proceeding...")
+       
        # check if login form exists (might already be logged in)
        try:
            # fills username and password
@@ -78,6 +92,60 @@ class WebAutomationBot:
            # might already be logged in if using saved auth
            logger.info("Login form not found - might already be logged in")
    
+   async def order_item(self, item_number: int):
+       # function to navigate and order items
+       logger.info(f"Starting order process for item #{item_number}...")
+       
+       # clicks on add/view retail orders
+       logger.info("Clicking Add/View Retail Orders...")
+       await self.page.click('span:has-text("Add/View Retail Orders")')
+       
+       # wait for page to load after clicking
+       await self.page.wait_for_load_state('networkidle')
+       logger.info("Navigated to retail orders page")
+       
+       # clicking add order
+       logger.info("Clicking Add Order...")
+       await self.page.click('span:has-text("Add Order")')
+       
+       # wait for page to load after clicking
+       await self.page.wait_for_load_state('networkidle')
+       logger.info("Navigated to add order page")
+       
+       # click on manually enter items button
+       logger.info("Selecting manually enter item button...")
+       await self.page.click('input[type="radio"][id="Dl-q"]')
+       
+       # click next button to go to item entry page
+       logger.info("Clicking Next button...")
+       await self.page.click('span.ActionButtonCaptionText:has-text("Next")')
+       
+       # wait for page to load after clicking next
+       await self.page.wait_for_load_state('networkidle')
+       logger.info("Navigated to item entry page")
+       
+       # input item number into search field
+       logger.info(f"Entering item number: {item_number}")
+       await self.page.fill('input[id="Dm-8"]', str(item_number))
+       
+       logger.info(f"Item number {item_number} entered in search field")
+       
+       # press Enter key after inputting item number
+       logger.info("Pressing Enter key...")
+       await self.page.press('input[id="Dm-8"]', 'Enter')
+       
+       # wait for page to load/update after pressing Enter
+       await self.page.wait_for_load_state('networkidle')
+       
+       # clicking add item button
+       logger.info("Clicking Add Item button...")
+       await self.page.click('span:has-text("Add Item")')
+       
+       # wait for page to load/update after adding item
+       await self.page.wait_for_load_state('networkidle')
+       logger.info(f"Item {item_number} added successfully")
+       
+   
    async def save_auth_state(self):
        # save the authentication state for future runs
        logger.info("Saving authentication state...")
@@ -91,16 +159,20 @@ class WebAutomationBot:
            await self.playwright.stop()
 
 async def main():
-  # create bot with visible browser
-  bot = WebAutomationBot(headless=False)
-  
-  # run setup (use_saved_auth=True by default, set to False for first run)
-  await bot.setup(use_saved_auth=True)
-  
-  # wait to see the result
-  await asyncio.sleep(5)
-  
-  await bot.cleanup()
+   # create bot with visible browser
+   bot = WebAutomationBot(headless=False)
+   
+   # run setup (use_saved_auth=True by default, set to False for first run)
+   await bot.setup(use_saved_auth=True)
+   
+   # order an item for test
+   item_to_order = 38178
+   await bot.order_item(item_to_order)
+   
+   # wait to see the result
+   await asyncio.sleep(5)
+   
+   await bot.cleanup()
 
 if __name__ == "__main__":
-  asyncio.run(main())
+   asyncio.run(main())
