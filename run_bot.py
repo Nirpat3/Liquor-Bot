@@ -35,25 +35,19 @@ def main():
     print("Mississippi DOR Order Bot")
     print("-" * 30)
     
-    # check requirements
-    missing = check_requirements()
-    
-    if missing:
-        print(f"Missing packages: {', '.join(missing)}")
-        response = input("Install missing packages? (y/n): ")
-        
-        if response.lower() == 'y':
-            install_requirements()
-        else:
-            print("Cannot run without required packages.")
-            return
-    
-    # run the GUI
-    print("Starting GUI...")
-    
-    # import and run
-    from gui_bot import main as run_gui
-    run_gui()
+    try:
+        # Try Tkinter GUI
+        from gui_bot import main as run_gui
+        run_gui()
+    except ImportError:
+        print("Tkinter not available. Starting web interface...")
+        # Install Flask if needed
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "flask"])
+        # Run web GUI
+        from web_gui import app
+        import webbrowser
+        webbrowser.open('http://127.0.0.1:5001')
+        app.run(debug=False, port=5001, host='0.0.0.0')
 
 if __name__ == "__main__":
     main()
