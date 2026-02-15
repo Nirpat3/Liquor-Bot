@@ -49,7 +49,7 @@ HTML_TEMPLATE = '''
         .status { font-size: 20px; font-weight: bold; margin: 20px 0; padding: 10px; border-radius: 5px; }
         .running { background: #d4edda; color: #155724; }
         .stopped { background: #f8d7da; color: #721c24; }
-        #logs { background: #2c3e50; color: #ecf0f1; padding: 15px; height: 400px; overflow-y: scroll; font-family: monospace; font-size: 12px; border-radius: 5px; }
+        #logs-content { background: #2c3e50; color: #ecf0f1; padding: 15px; height: 400px; overflow-y: scroll; font-family: monospace; font-size: 12px; border-radius: 5px; }
         .log-entry { margin: 2px 0; }
         .stats-box { background: #e9ecef; padding: 15px; border-radius: 5px; margin: 20px 0; }
         .input-group { margin: 10px 0; }
@@ -138,7 +138,7 @@ HTML_TEMPLATE = '''
             <h2>System Logs</h2>
             <button class="danger" onclick="clearLogs()">🗑️ Clear Logs</button>
             <button onclick="loadLogs()">🔄 Refresh Logs</button>
-            <div id="logs"></div>
+            <div id="logs-content"></div>
         </div>
     </div>
     
@@ -294,7 +294,7 @@ HTML_TEMPLATE = '''
             fetch('/get_logs')
                 .then(r => r.json())
                 .then(data => {
-                    const logsDiv = document.getElementById('logs');
+                    const logsDiv = document.getElementById('logs-content');
                     logsDiv.innerHTML = data.logs.map(log => 
                         `<div class="log-entry">${log}</div>`
                     ).join('');
@@ -535,7 +535,6 @@ def run_bot_thread():
     asyncio.set_event_loop(loop)
     
     try:
-        # Import your bot script
         from bot_script import WebAutomationBot, read_csv_file, update_csv_file
         
         async def run_bot():
@@ -543,8 +542,15 @@ def run_bot_thread():
             headless = os.getenv('HEADLESS', 'False').lower() == 'true'
             bot = WebAutomationBot(headless=headless)
             
+            # Ensure orders.csv exists
+            if not Path('orders.csv').exists():
+                with open('orders.csv', 'w', newline='') as f:
+                    f.write('item_number,quantity,order_filled\n')
+                logging.info("Created empty orders.csv")
+            
             try:
                 await bot.setup(use_saved_auth=True)
+                logging.info("Bot ready. If prompted for OTP, complete it in the browser.")
                 
                 while not stop_event.is_set():
                     items = read_csv_file('orders.csv')
@@ -552,18 +558,26 @@ def run_bot_thread():
                                     if item.get('order_filled', '').lower() != 'yes']
                     
                     if not unfilled_items:
-                        logging.info("No unfilled items. Waiting...")
+                        logging.info("All items completed. Waiting 30s for new items...")
                         await asyncio.sleep(30)
                         continue
                     
-                    logging.info(f"Processing {len(unfilled_items)} items...")
-                    await bot.process_multiple_items(unfilled_items)
+                    logging.info(f"Processing {len(unfilled_items)} unfilled items...")
+                    result = await bot.process_multiple_items(items)
                     update_csv_file('orders.csv', items)
                     
-                    await asyncio.sleep(30)
+                    if result['success']:
+                        logging.info(f"ORDER SUCCESS: {result['message']}")
+                        await asyncio.sleep(2)
+                    elif result['items_ordered']:
+                        logging.warning(f"ORDER FAILED: {result['message']}")
+                        await asyncio.sleep(5)
+                    else:
+                        logging.info("No items available. Checking again in 5s...")
+                        await asyncio.sleep(5)
                     
             except Exception as e:
-                logging.error(f"Bot error: {e}")
+                logging.error(f"Bot error: {e}", exc_info=True)
             finally:
                 await bot.cleanup()
         

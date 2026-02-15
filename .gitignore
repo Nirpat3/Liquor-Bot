@@ -1,0 +1,22 @@
+# Credentials and secrets - never commit
+.env
+auth_state.json
+
+# Screenshots from bot debugging
+*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

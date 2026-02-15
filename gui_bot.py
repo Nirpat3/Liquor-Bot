@@ -407,8 +407,12 @@ class BotGUI:
                 
                 logging.info(f"Processing {len(unfilled_items)} items...")
                 
-                # process items
-                await bot.process_multiple_items(unfilled_items)
+                result = await bot.process_multiple_items(items)
+                
+                if result['success']:
+                    logging.info(f"ORDER SUCCESS: {result['message']}")
+                elif result['items_ordered']:
+                    logging.warning(f"ORDER FAILED: {result['message']}")
                 
                 # update csv
                 update_csv_file('orders.csv', items)
