@@ -383,51 +383,80 @@ class BotGUI:
         # import bot class
         from bot_script import WebAutomationBot, read_csv_file, update_csv_file
         
-        bot = WebAutomationBot(headless=self.headless_var.get())
+        headless = self.headless_var.get()
+        bot = WebAutomationBot(headless=headless)
         
         try:
             await bot.setup(use_saved_auth=self.use_saved_auth_var.get())
+            logging.info("Bot ready. If prompted for OTP, complete it in the browser.")
             
             while not self.stop_event.is_set():
-                # read items from csv
-                items = read_csv_file('orders.csv')
-                
-                # filter unfilled items
-                unfilled_items = [item for item in items 
-                                if item.get('order_filled', '').lower() != 'yes']
-                
-                if not unfilled_items:
-                    logging.info("No unfilled items. Waiting...")
-                    await asyncio.sleep(30)
+                try:
+                    # read items from csv
+                    items = read_csv_file('orders.csv')
+                    
+                    # filter unfilled items
+                    unfilled_items = [item for item in items 
+                                    if item.get('order_filled', '').lower() != 'yes']
+                    
+                    if not unfilled_items:
+                        logging.info("All items completed! Checking for new items in 5 seconds...")
+                        await asyncio.sleep(5)
+                        self.root.after(0, self.load_csv)
+                        self.root.after(0, self.update_stats)
+                        continue
+                    
+                    logging.info(f"Checking {len(unfilled_items)} items for availability...")
+                    
+                    # Start a new order if not already on the order page
+                    current_url = bot.page.url
+                    if 'itemEntry' not in current_url:
+                        await bot.start_order()
+                    
+                    items_found, total_qty_added = await bot.check_and_process_items(items)
+                    
+                    if items_found and total_qty_added >= 10:
+                        item_numbers = [str(item['item_number']) for item in items_found]
+                        logging.info(f"Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
+                        await bot.submit_order()
+                        update_csv_file('orders.csv', items)
+                        logging.info("Immediately checking for remaining items...")
+                    elif items_found and total_qty_added < 10:
+                        logging.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting - will retry.")
+                        for item in items_found:
+                            item['order_filled'] = ''
+                    else:
+                        logging.info("No items available. Checking again in 1 second...")
+                        await asyncio.sleep(1)
                     
                     # update UI
                     self.root.after(0, self.load_csv)
                     self.root.after(0, self.update_stats)
-                    continue
                 
-                logging.info(f"Processing {len(unfilled_items)} items...")
-                
-                result = await bot.process_multiple_items(items)
-                
-                if result['success']:
-                    logging.info(f"ORDER SUCCESS: {result['message']}")
-                elif result['items_ordered']:
-                    logging.warning(f"ORDER FAILED: {result['message']}")
-                
-                # update csv
-                update_csv_file('orders.csv', items)
-                
-                # update UI
-                self.root.after(0, self.load_csv)
-                self.root.after(0, self.update_stats)
-                
-                # wait before next batch
-                await asyncio.sleep(30)
+                except Exception as e:
+                    logging.error(f"Error during bot operation: {e}", exc_info=True)
+                    
+                    # Re-initialize the bot to recover from crash
+                    logging.info("Attempting to recover by re-initializing the bot...")
+                    try:
+                        await bot.cleanup()
+                    except Exception:
+                        pass
+                    bot = WebAutomationBot(headless=headless)
+                    try:
+                        await bot.setup(use_saved_auth=True)
+                        logging.info("Bot recovered successfully")
+                    except Exception as setup_err:
+                        logging.error(f"Recovery failed: {setup_err}")
+                        await asyncio.sleep(5)
                 
         except Exception as e:
-            logging.error(f"Bot error: {e}")
+            logging.error(f"Bot startup error: {e}", exc_info=True)
         finally:
-            await bot.cleanup()
+            try:
+                await bot.cleanup()
+            except Exception:
+                pass
             
     def clear_logs(self):
         self.log_text.configure(state='normal')

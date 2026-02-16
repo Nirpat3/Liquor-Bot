@@ -530,7 +530,8 @@ def upload_csv():
     return jsonify({'error': 'Invalid file'}), 400
 
 def run_bot_thread():
-    """Run the bot in a separate thread"""
+    """Run the bot in a separate thread with error recovery matching bot_script.py main loop"""
+    global bot_running
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
@@ -538,6 +539,7 @@ def run_bot_thread():
         from bot_script import WebAutomationBot, read_csv_file, update_csv_file
         
         async def run_bot():
+            global bot_running
             load_dotenv()
             headless = os.getenv('HEADLESS', 'False').lower() == 'true'
             bot = WebAutomationBot(headless=headless)
@@ -553,33 +555,63 @@ def run_bot_thread():
                 logging.info("Bot ready. If prompted for OTP, complete it in the browser.")
                 
                 while not stop_event.is_set():
-                    items = read_csv_file('orders.csv')
-                    unfilled_items = [item for item in items 
-                                    if item.get('order_filled', '').lower() != 'yes']
+                    try:
+                        items = read_csv_file('orders.csv')
+                        unfilled_items = [item for item in items 
+                                        if item.get('order_filled', '').lower() != 'yes']
+                        
+                        if not unfilled_items:
+                            logging.info("All items completed! Checking for new items in 5 seconds...")
+                            await asyncio.sleep(5)
+                            continue
+                        
+                        logging.info(f"Checking {len(unfilled_items)} items for availability...")
+                        
+                        # Start a new order if not already on the order page
+                        current_url = bot.page.url
+                        if 'itemEntry' not in current_url:
+                            await bot.start_order()
+                        
+                        items_found, total_qty_added = await bot.check_and_process_items(items)
+                        
+                        if items_found and total_qty_added >= 10:
+                            item_numbers = [str(item['item_number']) for item in items_found]
+                            logging.info(f"Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
+                            await bot.submit_order()
+                            update_csv_file('orders.csv', items)
+                            logging.info("Immediately checking for remaining items...")
+                        elif items_found and total_qty_added < 10:
+                            logging.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting - will retry.")
+                            for item in items_found:
+                                item['order_filled'] = ''
+                        else:
+                            logging.info("No items available. Checking again in 1 second...")
+                            await asyncio.sleep(1)
                     
-                    if not unfilled_items:
-                        logging.info("All items completed. Waiting 30s for new items...")
-                        await asyncio.sleep(30)
-                        continue
-                    
-                    logging.info(f"Processing {len(unfilled_items)} unfilled items...")
-                    result = await bot.process_multiple_items(items)
-                    update_csv_file('orders.csv', items)
-                    
-                    if result['success']:
-                        logging.info(f"ORDER SUCCESS: {result['message']}")
-                        await asyncio.sleep(2)
-                    elif result['items_ordered']:
-                        logging.warning(f"ORDER FAILED: {result['message']}")
-                        await asyncio.sleep(5)
-                    else:
-                        logging.info("No items available. Checking again in 5s...")
-                        await asyncio.sleep(5)
+                    except Exception as e:
+                        logging.error(f"Error during bot operation: {e}", exc_info=True)
+                        
+                        # Re-initialize the bot to recover from crash
+                        logging.info("Attempting to recover by re-initializing the bot...")
+                        try:
+                            await bot.cleanup()
+                        except Exception:
+                            pass
+                        bot = WebAutomationBot(headless=headless)
+                        try:
+                            await bot.setup(use_saved_auth=True)
+                            logging.info("Bot recovered successfully")
+                        except Exception as setup_err:
+                            logging.error(f"Recovery failed: {setup_err}")
+                            await asyncio.sleep(5)
                     
             except Exception as e:
-                logging.error(f"Bot error: {e}", exc_info=True)
+                logging.error(f"Bot startup error: {e}", exc_info=True)
             finally:
-                await bot.cleanup()
+                try:
+                    await bot.cleanup()
+                except Exception:
+                    pass
         
         loop.run_until_complete(run_bot())
     except Exception as e:
@@ -593,10 +625,10 @@ if __name__ == '__main__':
     print("Mississippi DOR Order Bot - Web Interface")
     print("="*50)
     print("\nStarting web server...")
-    print("\n🌐 Open your browser and go to: http://localhost:5000")
+    print("\n🌐 Open your browser and go to: http://localhost:5050")
     print("\nPress Ctrl+C to stop the server\n")
     
     import webbrowser
-    webbrowser.open('http://localhost:5000')
+    webbrowser.open('http://localhost:5050')
     
-    app.run(debug=False, port=5000, host='0.0.0.0')
+    app.run(debug=False, port=5050, host='0.0.0.0')

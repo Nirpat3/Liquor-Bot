@@ -47,8 +47,8 @@ def main():
             subprocess.check_call([sys.executable, "-m", "pip", "install", "flask"])
         from web_gui import app
         import webbrowser
-        webbrowser.open('http://127.0.0.1:5000')
-        app.run(debug=False, port=5000, host='0.0.0.0')
+        webbrowser.open('http://127.0.0.1:5050')
+        app.run(debug=False, port=5050, host='0.0.0.0')
 
 if __name__ == "__main__":
     main()
