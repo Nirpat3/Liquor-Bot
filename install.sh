@@ -10,11 +10,28 @@
 #   5. Installs Playwright Chromium browser
 #   6. Creates a "Liquor Bot.app" on the Desktop
 #
-# Usage:
-#   chmod +x install.sh && ./install.sh
+# Usage (one-liner):
+#   curl -fsSL https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install.sh -o /tmp/install.sh && bash /tmp/install.sh
+#
+# Or download first:
+#   curl -fsSL https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install.sh -o install.sh
+#   bash install.sh
 #
 
 set -e
+
+# ── Refuse to run as root ──
+if [[ "$EUID" -eq 0 ]]; then
+    echo ""
+    echo "ERROR: Do not run this installer with 'sudo'."
+    echo ""
+    echo "Homebrew (and this installer) must run as your normal user."
+    echo ""
+    echo "Instead, run:"
+    echo "  curl -fsSL https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install.sh -o install.sh && bash install.sh"
+    echo ""
+    exit 1
+fi
 
 # ── Colors ──
 RED='\033[0;31m'
@@ -48,7 +65,7 @@ if command -v brew &>/dev/null; then
     print_ok "Homebrew is already installed"
 else
     print_warn "Homebrew not found. Installing..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
     # Add Homebrew to PATH for Apple Silicon and Intel Macs
     if [[ -f /opt/homebrew/bin/brew ]]; then
