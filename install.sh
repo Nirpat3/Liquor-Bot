@@ -364,6 +364,10 @@ echo "Liquor Bot has been uninstalled."
 UNINSTALL
 chmod +x "$INSTALL_DIR/uninstall.sh"
 
+# Strip quarantine attribute so macOS Gatekeeper doesn't block the app
+xattr -cr "$DESKTOP_APP" 2>/dev/null || true
+print_ok "Cleared macOS quarantine flags"
+
 print_ok "Desktop application created at: $DESKTOP_APP"
 
 # ── Done ──
