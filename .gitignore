@@ -20,3 +20,12 @@ env/
 .vscode/
 *.swp
 *.swo
+
+# macOS
+.DS_Store
+
+# Data files (user-managed, not tracked)
+Order Data/*.ods
+Order Data/FutureSPA/*.ods
+orders.csv
+specialorder.csv

@@ -7,8 +7,13 @@ import json
 from pathlib import Path
 import logging
 import os
+import re
+from datetime import datetime
 from dotenv import load_dotenv
 import sys
+from odf.opendocument import load as load_ods
+from odf.table import Table, TableRow, TableCell
+from odf.text import P
 
 app = Flask(__name__)
 bot_thread = None
@@ -65,6 +70,8 @@ HTML_TEMPLATE = '''
             <div class="tab" onclick="showTab('orders')">📋 Orders</div>
             <div class="tab" onclick="showTab('control')">🎮 Control</div>
             <div class="tab" onclick="showTab('logs')">📜 Logs</div>
+            <div class="tab" onclick="showTab('orderdata')">📂 Order Data</div>
+            <div class="tab" onclick="showTab('specialorders')">⭐ Special Orders</div>
         </div>
         
         <div id="settings" class="tab-content active">
@@ -140,6 +147,67 @@ HTML_TEMPLATE = '''
             <button onclick="loadLogs()">🔄 Refresh Logs</button>
             <div id="logs-content"></div>
         </div>
+        
+        <div id="orderdata" class="tab-content">
+            <h2>Order Data Lookup</h2>
+            <p style="color:#666; margin-bottom:15px;">Select order files to search across. Shows all items with their source file and order date.</p>
+            <div style="margin-bottom:15px;">
+                <button onclick="loadOrderFiles()">🔄 Refresh Files</button>
+                <button class="success" onclick="searchOrderData()">🔍 Search Selected</button>
+                <label style="margin-left:15px; cursor:pointer;"><input type="checkbox" id="select-all-files" onchange="toggleAllFiles(this)"> Select All</label>
+            </div>
+            <div id="order-files-list" style="background:#f0f0f0; padding:10px; border-radius:5px; margin-bottom:20px; max-height:200px; overflow-y:auto;"></div>
+            <div style="margin-bottom:10px;">
+                <label style="cursor:pointer;"><input type="checkbox" id="include-special-orders" checked> Include Special Orders (specialorder.csv)</label>
+            </div>
+            <div id="order-data-status" style="margin-bottom:10px; font-weight:bold;"></div>
+            <div style="margin-bottom:10px;">
+                <input type="text" id="item-search-filter" placeholder="Item #s (comma-separated) or Name/Category..." oninput="filterOrderResults()" style="width:400px; padding:8px;">
+            </div>
+            <div style="overflow-x:auto;">
+                <table id="order-data-table" style="display:none;">
+                    <thead>
+                        <tr>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('item_num')">Item # ⇅</th>
+                            <th>Qty Reserved</th>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('name')">Name ⇅</th>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('source_file')">Source ⇅</th>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('spa_date')">Sale Date ⇅</th>
+                            <th>SPA Price</th>
+                            <th>Discount</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div id="specialorders" class="tab-content">
+            <h2>Special Orders</h2>
+            <p style="color:#666; margin-bottom:15px;">Manage special order items. These can be searched from the Order Data tab.</p>
+            <div style="margin-bottom:20px;">
+                <input type="number" id="so-item-number" placeholder="Item Number" style="width:130px;">
+                <input type="number" id="so-quantity" placeholder="Quantity" style="width:100px;">
+                <input type="text" id="so-name" placeholder="Name" style="width:200px;">
+                <input type="text" id="so-order-number" placeholder="Order Number" style="width:130px;">
+                <input type="text" id="so-order-date" placeholder="Order Date" style="width:130px;">
+                <button class="success" onclick="addSpecialOrder()">➕ Add</button>
+                <button onclick="loadSpecialOrders()">🔄 Refresh</button>
+            </div>
+            <table id="special-orders-table">
+                <thead>
+                    <tr>
+                        <th>Item Number</th>
+                        <th>Quantity</th>
+                        <th>Name</th>
+                        <th>Order Number</th>
+                        <th>Order Date</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
     </div>
     
     <script>
@@ -164,6 +232,14 @@ HTML_TEMPLATE = '''
                 ordersInterval = setInterval(loadOrders, 5000);
             } else {
                 clearInterval(ordersInterval);
+            }
+            
+            if (tabName === 'orderdata') {
+                loadOrderFiles();
+            }
+            
+            if (tabName === 'specialorders') {
+                loadSpecialOrders();
             }
         }
         
@@ -325,6 +401,186 @@ HTML_TEMPLATE = '''
                 alert('CSV uploaded successfully!');
                 loadOrders();
             });
+        }
+        
+        let orderDataResults = [];
+        let orderDataSortKey = 'order_date';
+        let orderDataSortAsc = false;
+        
+        function loadOrderFiles() {
+            fetch('/get_order_files')
+                .then(r => r.json())
+                .then(data => {
+                    const container = document.getElementById('order-files-list');
+                    if (data.files.length === 0) {
+                        container.innerHTML = '<p style="color:#999;">No .ods files found in Order Data folder.</p>';
+                        return;
+                    }
+                    container.innerHTML = data.files.map(f => `
+                        <label style="display:block; margin:4px 0; cursor:pointer;">
+                            <input type="checkbox" class="order-file-cb" value="${f.filename}" checked>
+                            ${f.display_name} <span style="color:#888; font-size:12px;">(${f.filename})</span>
+                        </label>
+                    `).join('');
+                    document.getElementById('select-all-files').checked = true;
+                });
+        }
+        
+        function toggleAllFiles(cb) {
+            document.querySelectorAll('.order-file-cb').forEach(c => c.checked = cb.checked);
+        }
+        
+        function searchOrderData() {
+            const selected = Array.from(document.querySelectorAll('.order-file-cb:checked')).map(c => c.value);
+            const includeSpecial = document.getElementById('include-special-orders').checked;
+            if (selected.length === 0 && !includeSpecial) {
+                alert('Please select at least one file or include special orders.');
+                return;
+            }
+            const statusDiv = document.getElementById('order-data-status');
+            statusDiv.textContent = 'Searching...';
+            
+            fetch('/search_order_data', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({files: selected, include_special: includeSpecial})
+            })
+            .then(r => r.json())
+            .then(data => {
+                orderDataResults = data.items;
+                orderDataSortKey = 'order_date';
+                orderDataSortAsc = false;
+                const uniqueItems = new Set(data.items.map(i => i.item_num)).size;
+                let src = selected.length + ' file(s)';
+                if (includeSpecial) src += ' + specialorder.csv';
+                statusDiv.textContent = `Found ${data.items.length} rows (${uniqueItems} unique items) across ${src}.`;
+                renderOrderResults();
+            })
+            .catch(err => {
+                statusDiv.textContent = 'Error: ' + err;
+            });
+        }
+        
+        function renderOrderResults() {
+            const table = document.getElementById('order-data-table');
+            const raw = document.getElementById('item-search-filter').value.trim();
+            let items = orderDataResults;
+            if (raw) {
+                const parts = raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+                const numericParts = parts.filter(p => /^[0-9]+$/.test(p));
+                if (numericParts.length === parts.length && numericParts.length > 0) {
+                    const numSet = new Set(numericParts);
+                    items = items.filter(i => numSet.has(i.item_num));
+                } else {
+                    items = items.filter(i =>
+                        parts.some(p =>
+                            i.item_num.toLowerCase().includes(p) ||
+                            i.name.toLowerCase().includes(p) ||
+                            i.category.toLowerCase().includes(p)
+                        )
+                    );
+                }
+            }
+            const tbody = table.querySelector('tbody');
+            tbody.innerHTML = items.map(item => {
+                const isSO = item.source_file.startsWith('SO#');
+                const hasSale = item.spa_date && item.spa_date !== '';
+                let rowStyle = '';
+                if (hasSale) rowStyle = 'background:#d4edda; color:#155724;';
+                else if (isSO) rowStyle = 'background:#f8d7da; color:#721c24;';
+                return `
+                <tr style="${rowStyle}">
+                    <td>${item.item_num}</td>
+                    <td>${item.qty_reserved}</td>
+                    <td>${item.name}</td>
+                    <td>${item.source_file}</td>
+                    <td>${item.spa_date || ''}</td>
+                    <td>${item.spa_price || ''}</td>
+                    <td>${item.spa_discount || ''}</td>
+                </tr>`;
+            }).join('');
+            table.style.display = items.length > 0 ? 'table' : 'none';
+        }
+        
+        function filterOrderResults() {
+            renderOrderResults();
+        }
+        
+        function sortOrderResults(key) {
+            if (orderDataSortKey === key) {
+                orderDataSortAsc = !orderDataSortAsc;
+            } else {
+                orderDataSortKey = key;
+                orderDataSortAsc = true;
+            }
+            orderDataResults.sort((a, b) => {
+                let va, vb;
+                if (key === 'spa_date') {
+                    va = a.spa_sort_date || ''; vb = b.spa_sort_date || '';
+                } else {
+                    va = a[key] || ''; vb = b[key] || '';
+                }
+                if (va < vb) return orderDataSortAsc ? -1 : 1;
+                if (va > vb) return orderDataSortAsc ? 1 : -1;
+                return 0;
+            });
+            renderOrderResults();
+        }
+        
+        function loadSpecialOrders() {
+            fetch('/get_special_orders')
+                .then(r => r.json())
+                .then(data => {
+                    const tbody = document.querySelector('#special-orders-table tbody');
+                    tbody.innerHTML = data.map((item, index) => `
+                        <tr>
+                            <td>${item.item_number}</td>
+                            <td>${item.quantity}</td>
+                            <td>${item.name}</td>
+                            <td>${item.order_number}</td>
+                            <td>${item.order_date}</td>
+                            <td>
+                                <button class="danger" onclick="deleteSpecialOrder(${index})">Delete</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                });
+        }
+        
+        function addSpecialOrder() {
+            const item_number = document.getElementById('so-item-number').value;
+            const quantity = document.getElementById('so-quantity').value;
+            const name = document.getElementById('so-name').value;
+            const order_number = document.getElementById('so-order-number').value;
+            const order_date = document.getElementById('so-order-date').value;
+            
+            if (!item_number) {
+                alert('Please enter at least an item number.');
+                return;
+            }
+            
+            fetch('/add_special_order', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({item_number, quantity, name, order_number, order_date})
+            }).then(() => {
+                document.getElementById('so-item-number').value = '';
+                document.getElementById('so-quantity').value = '';
+                document.getElementById('so-name').value = '';
+                document.getElementById('so-order-number').value = '';
+                document.getElementById('so-order-date').value = '';
+                loadSpecialOrders();
+            });
+        }
+        
+        function deleteSpecialOrder(index) {
+            if (confirm('Delete this special order?')) {
+                fetch('/delete_special_order', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({index: index})
+                }).then(() => loadSpecialOrders());
+            }
         }
         
         // Check bot status periodically
@@ -528,6 +784,213 @@ def upload_csv():
         file.save('orders.csv')
         return jsonify({'success': True})
     return jsonify({'error': 'Invalid file'}), 400
+
+ORDER_DATA_DIR = Path('Order Data')
+
+def parse_date_from_filename(filename):
+    """Extract date from filenames like 'R301542-2-16-26.ods' (M-DD-YY)."""
+    match = re.search(r'(\d{1,2})-(\d{1,2})-(\d{2,4})', filename)
+    if match:
+        try:
+            m, d, y = match.group(1), match.group(2), match.group(3)
+            if len(y) == 2:
+                y = '20' + y
+            return datetime(int(y), int(m), int(d))
+        except (ValueError, TypeError):
+            pass
+    return None
+
+def read_ods_file(filepath):
+    """Read an ODS file. Returns (date, list_of_item_dicts)."""
+    doc = load_ods(str(filepath))
+    dt = parse_date_from_filename(filepath.name)
+    items = []
+    for sheet in doc.body.getElementsByType(Table):
+        rows = sheet.getElementsByType(TableRow)
+        if not rows:
+            continue
+        for row in rows[1:]:
+            cells = row.getElementsByType(TableCell)
+            vals = []
+            for cell in cells:
+                repeat = int(cell.getAttribute('numbercolumnsrepeated') or 1)
+                ps = cell.getElementsByType(P)
+                text = ''.join(p.firstChild.data if p.firstChild else '' for p in ps)
+                vals.extend([text] * min(repeat, 20))
+            if len(vals) >= 9 and vals[0].strip():
+                items.append({
+                    'item_num': vals[0].strip(),
+                    'name': vals[1].strip(),
+                    'category': vals[2].strip(),
+                    'pkg_type': vals[3].strip(),
+                    'units': vals[4].strip(),
+                    'price': vals[5].strip(),
+                    'qty_requested': vals[6].strip(),
+                    'qty_reserved': vals[7].strip(),
+                    'sub_total': vals[8].strip(),
+                })
+    return dt, items
+
+@app.route('/get_order_files')
+def get_order_files():
+    if not ORDER_DATA_DIR.exists():
+        return jsonify({'files': []})
+    files = []
+    for f in sorted(ORDER_DATA_DIR.iterdir()):
+        if f.suffix.lower() == '.ods':
+            dt = parse_date_from_filename(f.name)
+            display = dt.strftime('%b %d, %Y') if dt else f.stem
+            files.append({
+                'filename': f.name,
+                'display_name': display,
+                'sort_key': dt.isoformat() if dt else '',
+            })
+    files.sort(key=lambda x: x['sort_key'], reverse=True)
+    return jsonify({'files': files})
+
+SPECIAL_ORDER_CSV = Path('specialorder.csv')
+SPECIAL_ORDER_FIELDS = ['item_number', 'quantity', 'name', 'order_number', 'order_date']
+
+def _read_special_orders():
+    orders = []
+    if SPECIAL_ORDER_CSV.exists():
+        with open(SPECIAL_ORDER_CSV, 'r', newline='') as f:
+            reader = csv.DictReader(f)
+            orders = list(reader)
+    return orders
+
+def _write_special_orders(orders):
+    with open(SPECIAL_ORDER_CSV, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=SPECIAL_ORDER_FIELDS)
+        writer.writeheader()
+        writer.writerows(orders)
+
+@app.route('/get_special_orders')
+def get_special_orders():
+    return jsonify(_read_special_orders())
+
+@app.route('/add_special_order', methods=['POST'])
+def add_special_order():
+    data = request.json
+    orders = _read_special_orders()
+    orders.append({
+        'item_number': data.get('item_number', ''),
+        'quantity': data.get('quantity', ''),
+        'name': data.get('name', ''),
+        'order_number': data.get('order_number', ''),
+        'order_date': data.get('order_date', ''),
+    })
+    _write_special_orders(orders)
+    return jsonify({'success': True})
+
+@app.route('/delete_special_order', methods=['POST'])
+def delete_special_order():
+    index = request.json['index']
+    orders = _read_special_orders()
+    if 0 <= index < len(orders):
+        orders.pop(index)
+    _write_special_orders(orders)
+    return jsonify({'success': True})
+
+FUTURE_SPA_DIR = ORDER_DATA_DIR / 'FutureSPA'
+
+def _load_future_spa():
+    """Load FutureSPA data into a dict keyed by item code."""
+    spa = {}
+    if not FUTURE_SPA_DIR.exists():
+        return spa
+    for f in FUTURE_SPA_DIR.iterdir():
+        if f.suffix.lower() != '.ods':
+            continue
+        try:
+            doc = load_ods(str(f))
+        except Exception:
+            continue
+        for sheet in doc.body.getElementsByType(Table):
+            rows = sheet.getElementsByType(TableRow)
+            if not rows:
+                continue
+            for row in rows[1:]:
+                cells = row.getElementsByType(TableCell)
+                vals = []
+                for cell in cells:
+                    repeat = int(cell.getAttribute('numbercolumnsrepeated') or 1)
+                    ps = cell.getElementsByType(P)
+                    text = ''.join(p.firstChild.data if p.firstChild else '' for p in ps)
+                    vals.extend([text] * min(repeat, 20))
+                if len(vals) >= 9 and vals[1].strip():
+                    item_code = vals[1].strip()
+                    spa[item_code] = {
+                        'name': vals[2].strip(),
+                        'spa_date': vals[5].strip(),
+                        'spa_price': vals[7].strip(),
+                        'spa_discount': vals[8].strip(),
+                    }
+    return spa
+
+@app.route('/search_order_data', methods=['POST'])
+def search_order_data():
+    selected = request.json.get('files', [])
+    include_special = request.json.get('include_special', False)
+
+    spa_lookup = _load_future_spa()
+
+    all_rows = []
+    for fname in selected:
+        fpath = ORDER_DATA_DIR / fname
+        if not fpath.exists():
+            continue
+        try:
+            dt, rows = read_ods_file(fpath)
+        except Exception:
+            continue
+        date_str = dt.strftime('%b %d, %Y') if dt else fname
+        sort_date = dt.isoformat() if dt else ''
+        for row in rows:
+            row['sort_date'] = sort_date
+            row['source_file'] = fname
+            spa = spa_lookup.get(row['item_num'], {})
+            row['spa_date'] = spa.get('spa_date', '')
+            row['spa_price'] = spa.get('spa_price', '')
+            row['spa_discount'] = spa.get('spa_discount', '')
+            row['spa_sort_date'] = spa.get('spa_date', '')
+            all_rows.append(row)
+
+    if include_special and SPECIAL_ORDER_CSV.exists():
+        for srow in _read_special_orders():
+            item_num = srow.get('item_number', '').strip()
+            if not item_num:
+                continue
+            spa = spa_lookup.get(item_num, {})
+            all_rows.append({
+                'item_num': item_num,
+                'name': srow.get('name', '').strip(),
+                'qty_reserved': '',
+                'sort_date': '',
+                'source_file': 'SO#' + srow.get('order_number', '').strip(),
+                'spa_date': spa.get('spa_date', ''),
+                'spa_price': spa.get('spa_price', ''),
+                'spa_discount': spa.get('spa_discount', ''),
+                'spa_sort_date': spa.get('spa_date', ''),
+            })
+
+    seen_items = set(row['item_num'] for row in all_rows)
+    for item_code, spa in spa_lookup.items():
+        if item_code not in seen_items:
+            all_rows.append({
+                'item_num': item_code,
+                'name': spa.get('name', ''),
+                'qty_reserved': '',
+                'sort_date': '',
+                'source_file': 'SPA Only',
+                'spa_date': spa.get('spa_date', ''),
+                'spa_price': spa.get('spa_price', ''),
+                'spa_discount': spa.get('spa_discount', ''),
+                'spa_sort_date': spa.get('spa_date', ''),
+            })
+
+    all_rows.sort(key=lambda x: x.get('sort_date', ''), reverse=True)
+    return jsonify({'items': all_rows})
 
 def run_bot_thread():
     """Run the bot in a separate thread with error recovery matching bot_script.py main loop"""
