@@ -140,7 +140,7 @@ fi
 source "$INSTALL_DIR/venv/bin/activate"
 
 pip install --upgrade pip --quiet
-pip install flask playwright python-dotenv --quiet
+pip install -r "$INSTALL_DIR/requirements.txt" --quiet
 print_ok "Python dependencies installed"
 
 # ── Step 5: Playwright Chromium ──
@@ -345,6 +345,16 @@ if [[ ! -f "$INSTALL_DIR/orders.csv" ]]; then
     echo "item_number,quantity,order_filled" > "$INSTALL_DIR/orders.csv"
     print_ok "Created empty orders.csv"
 fi
+
+# Create specialorder.csv if it doesn't exist
+if [[ ! -f "$INSTALL_DIR/specialorder.csv" ]]; then
+    echo "item_number,quantity,name,order_number,order_date" > "$INSTALL_DIR/specialorder.csv"
+    print_ok "Created empty specialorder.csv"
+fi
+
+# Ensure Order Data folders exist
+mkdir -p "$INSTALL_DIR/Order Data/FutureSPA"
+print_ok "Order Data folders ready"
 
 # Also create an uninstall script
 cat > "$INSTALL_DIR/uninstall.sh" << 'UNINSTALL'

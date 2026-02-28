@@ -175,6 +175,7 @@ HTML_TEMPLATE = '''
                             <th style="cursor:pointer;" onclick="sortOrderResults('spa_date')">Sale Date ⇅</th>
                             <th>SPA Price</th>
                             <th>Discount</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody></tbody>
@@ -497,6 +498,7 @@ HTML_TEMPLATE = '''
                     <td>${item.spa_date || ''}</td>
                     <td>${item.spa_price || ''}</td>
                     <td>${item.spa_discount || ''}</td>
+                    <td><button class="success" style="padding:4px 10px; font-size:12px;" onclick="addToBot('${item.item_num}')">+ Bot</button></td>
                 </tr>`;
             }).join('');
             table.style.display = items.length > 0 ? 'table' : 'none';
@@ -525,6 +527,22 @@ HTML_TEMPLATE = '''
                 return 0;
             });
             renderOrderResults();
+        }
+        
+        function addToBot(itemNum) {
+            const qty = prompt('Enter quantity for item ' + itemNum + ':');
+            if (qty === null || qty.trim() === '') return;
+            if (isNaN(qty) || parseInt(qty) <= 0) {
+                alert('Please enter a valid quantity.');
+                return;
+            }
+            fetch('/add_item', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({item_number: itemNum, quantity: qty.trim()})
+            }).then(r => r.json()).then(() => {
+                alert('Item ' + itemNum + ' (qty: ' + qty.trim() + ') added to bot orders.');
+            });
         }
         
         function loadSpecialOrders() {
