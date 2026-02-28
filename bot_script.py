@@ -200,11 +200,47 @@ class WebAutomationBot:
         """Navigate back to home page to start new order"""
         logger.info("Navigating back to home page...")
         site_url = os.getenv('SITE_URL')
-        await self.page.goto(site_url)
-        await self.page.wait_for_load_state('networkidle')
-        # wait for main page to load with correct selector
         main_selector = 'span.IconCaptionText:has-text("Add/View Retail Orders")'
-        await self.page.wait_for_selector(main_selector, timeout=10000)
+        
+        for attempt in range(3):
+            try:
+                await self.page.goto(site_url, wait_until='domcontentloaded', timeout=15000)
+                try:
+                    await self.page.wait_for_load_state('networkidle', timeout=5000)
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+                
+                # dismiss any dialogs/overlays via JS
+                await self.page.evaluate("""() => {
+                    document.querySelectorAll('[role="dialog"], .ui-dialog, .DocModalDialog').forEach(d => {
+                        const close = d.querySelector('.ui-dialog-titlebar-close, button[title="Close"], .close');
+                        if (close) close.click();
+                    });
+                    // click Start Over / OK buttons
+                    document.querySelectorAll('button, span, a, input[type="button"]').forEach(el => {
+                        const t = (el.textContent || el.value || '').trim();
+                        if (t === 'Start Over' || t === 'OK') el.click();
+                    });
+                }""")
+                await asyncio.sleep(0.5)
+                
+                # check main page and all frames for the button
+                all_contexts = [self.page] + list(self.page.frames)
+                for ctx in all_contexts:
+                    try:
+                        btn = await ctx.wait_for_selector(main_selector, timeout=3000)
+                        if btn:
+                            return
+                    except Exception:
+                        continue
+                
+                raise Exception("Add/View Retail Orders button not found")
+            except Exception:
+                if attempt < 2:
+                    await asyncio.sleep(1)
+                    continue
+                raise
     
     async def start_order(self):
         """Navigate to the item entry page to start a new order"""
@@ -220,7 +256,7 @@ class WebAutomationBot:
         # clicking add order
         await self.page.click('span:has-text("Add Order")')
         await self.page.wait_for_load_state('networkidle')
-        await asyncio.sleep(1)  # wait for modal/form to render
+        await asyncio.sleep(0.3)
         
         # click on manually enter items - try multiple selectors (IDs can be dynamic)
         manually_clicked = False
@@ -252,7 +288,7 @@ class WebAutomationBot:
                 'span:has-text("Manual Entry")',
             ]:
                 try:
-                    el = await self.page.wait_for_selector(selector, timeout=2000)
+                    el = await self.page.wait_for_selector(selector, timeout=500)
                     if el:
                         await el.click()
                         manually_clicked = True
@@ -275,11 +311,9 @@ class WebAutomationBot:
         if not manually_clicked:
             raise Exception("Could not find/click 'Manually Enter Items' option")
         
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.2)
         
         # click next button to go to item entry page
-        await self._scroll_to_bottom()
-        await asyncio.sleep(0.2)
         await self._scroll_to_bottom()
         await self.page.click('span.ActionButtonCaptionText:has-text("Next")')
         await self.page.wait_for_load_state('networkidle')
@@ -302,39 +336,28 @@ class WebAutomationBot:
         raise Exception("Could not find item search input")
     
     async def _click_add_item(self):
-        """Click Add Item - multiple methods, imperative that one works (Glide/ServiceNow structure)."""
-        async def try_click_in_frame(frame):
-            for sel in ['span:has-text("Add Item")', 'div:has(span:has-text("Add Item"))', 'td:has(span:has-text("Add Item"))']:
+        """Click Add Item button — Playwright force-click (real mouse events that trigger framework handlers)."""
+        # Playwright force-click — sends real events, bypasses overlay actionability checks
+        contexts = ([self._content_frame] if self._content_frame else []) + [self.page]
+        for ctx in contexts:
+            for sel in ['span.ActionButtonCaptionText:has-text("Add Item")', 'span:has-text("Add Item")', 'td:has(span:has-text("Add Item"))']:
                 try:
-                    loc = frame.locator(sel).first
-                    if await loc.count() == 0:
-                        continue
-                    await loc.scroll_into_view_if_needed()
-                    await loc.click(force=True, timeout=2000)
-                    return True
+                    el = await ctx.query_selector(sel)
+                    if el and await el.is_visible():
+                        await el.click(force=True)
+                        await asyncio.sleep(0.5)
+                        return True
                 except Exception:
                     continue
-            return False
-        async def try_click():
-            # try content frame first (where search input was found)
-            if self._content_frame and await try_click_in_frame(self._content_frame):
-                return True
-            if await try_click_in_frame(self.page):
-                return True
-            for fr in self.page.frames:
-                if fr != self.page.main_frame:
-                    try:
-                        if await try_click_in_frame(fr):
-                            return True
-                    except Exception:
-                        pass
-            eval_page = self._content_frame if self._content_frame else self.page
-            # Method 1: JS - find element with "Add Item" (exact or includes), get clickable parent
+        
+        # JS fallback — dispatches mouse events manually
+        eval_page = self._content_frame if self._content_frame else self.page
+        try:
             r = await eval_page.evaluate("""() => {
                 const all = document.querySelectorAll('span, div, td, button, a');
                 for (const e of all) {
-                    const t = e.textContent && e.textContent.trim();
-                    if ((t === 'Add Item' || t.includes('Add Item')) && e.offsetParent) {
+                    const t = (e.textContent || '').trim();
+                    if ((t === 'Add Item' || t === 'Add Item ') && e.offsetParent) {
                         const target = e.closest('[data-event]') || e.closest('td') || e.closest('div[role="button"]') || e.parentElement || e;
                         target.scrollIntoView({block: 'center'});
                         const rect = target.getBoundingClientRect();
@@ -346,96 +369,12 @@ class WebAutomationBot:
                 return false;
             }""")
             if r:
+                await asyncio.sleep(0.5)
                 return True
-            # Method 2: JS - direct .click() on element containing "Add Item"
-            r = await eval_page.evaluate("""() => {
-                const all = document.querySelectorAll('span, div, td, button');
-                for (const e of all) {
-                    const t = e.textContent && e.textContent.trim();
-                    if ((t === 'Add Item' || t.includes('Add Item')) && e.offsetParent) {
-                        e.scrollIntoView({block: 'center'});
-                        e.click();
-                        return true;
-                    }
-                }
-                return false;
-            }""")
-            if r:
-                return True
-            # Method 3: Playwright - div with data-event containing Add Item, mouse.click at center
-            try:
-                el = await eval_page.query_selector('div[data-event]:has(span:has-text("Add Item"))')
-                if el:
-                    await el.scroll_into_view_if_needed()
-                    box = await el.bounding_box()
-                    if box:
-                        await self.page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                        return True
-            except Exception:
-                pass
-            # Method 4: Playwright - td containing Add Item
-            try:
-                el = await eval_page.query_selector('td:has(span:has-text("Add Item"))')
-                if el:
-                    await el.scroll_into_view_if_needed()
-                    await el.click(force=True)
-                    return True
-            except Exception:
-                pass
-            # Method 5: Playwright - span ActionButtonCaptionText
-            try:
-                el = await eval_page.query_selector('span.ActionButtonCaptionText:has-text("Add Item")')
-                if el:
-                    await el.scroll_into_view_if_needed()
-                    await el.click(force=True)
-                    return True
-            except Exception:
-                pass
-            # Method 6: Playwright - any span with Add Item, mouse click at center
-            try:
-                el = await eval_page.query_selector('span:has-text("Add Item")')
-                if el:
-                    await el.scroll_into_view_if_needed()
-                    box = await el.bounding_box()
-                    if box:
-                        await self.page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
-                        return True
-            except Exception:
-                pass
-            # Method 7: Playwright getByText - flexible text match
-            try:
-                loc = eval_page.locator('text=Add Item')
-                if await loc.count() > 0:
-                    await loc.first.scroll_into_view_if_needed()
-                    await loc.first.click(force=True)
-                    return True
-            except Exception:
-                pass
-            # Method 8: JS - any element containing "add" and "item" (case insensitive)
-            r = await eval_page.evaluate("""() => {
-                const all = document.querySelectorAll('span, div, td, button, a');
-                for (const e of all) {
-                    const t = (e.textContent || '').toLowerCase();
-                    if (t.includes('add') && t.includes('item') && t.length < 20 && e.offsetParent) {
-                        const target = e.closest('[data-event]') || e.closest('td') || e.parentElement || e;
-                        target.scrollIntoView({block: 'center'});
-                        target.click();
-                        return true;
-                    }
-                }
-                return false;
-            }""")
-            if r:
-                return True
-            return False
-        try:
-            result = await asyncio.wait_for(try_click(), timeout=15.0)
-        except asyncio.TimeoutError:
-            logger.warning("    _click_add_item timed out after 15s")
-            result = False
-        if result:
-            await asyncio.sleep(0.6)
-        return result
+        except Exception:
+            pass
+        
+        return False
     
     async def check_and_process_items(self, items):
         """Check all unfilled items and add any available ones to cart (one order, min 10 total qty).
@@ -451,36 +390,45 @@ class WebAutomationBot:
             if item.get('order_filled', '').lower() == 'yes':
                 continue
             
-            # enter item number - click, clear, type (type() triggers proper input events)
+            # dismiss any modal/dialog that may be blocking
+            try:
+                ctx = self._content_frame or self.page
+                await ctx.evaluate("""() => {
+                    document.querySelectorAll('[role="dialog"], .ui-dialog, .DocModalDialog').forEach(d => {
+                        const close = d.querySelector('.ui-dialog-titlebar-close, button[title="Close"], .close');
+                        if (close) close.click();
+                    });
+                }""")
+            except Exception:
+                pass
+            
             logger.info(f"Checking item #{item_number}...")
             search_input = await self._get_search_input()
-            await search_input.click()
+            await search_input.click(force=True)
             await search_input.fill('')
-            await search_input.type(str(item_number), delay=30)
+            await search_input.type(str(item_number), delay=10)
             
             await search_input.press('Enter')
             await self.page.wait_for_load_state('networkidle')
-            await asyncio.sleep(0.5)  # wait for search results to render
             
             # check if Add Item button appears (indicates item is available)
             try:
                 add_item_visible = None
-                search_frames = ([self._content_frame] if self._content_frame else []) + [self.page] + list(self.page.frames)
-                primary = True
-                for frame in search_frames:
-                    if not frame:
-                        continue
-                    for sel in ['span:has-text("Add Item")', 'button:has-text("Add Item")', 'div:has(span:has-text("Add Item"))']:
+                primary_frame = self._content_frame or self.page
+                try:
+                    add_item_visible = await primary_frame.wait_for_selector('span:has-text("Add Item")', timeout=1000)
+                except Exception:
+                    pass
+                if not add_item_visible:
+                    for frame in [self.page] + list(self.page.frames):
+                        if frame == primary_frame or not frame:
+                            continue
                         try:
-                            t = 2000 if primary else 200
-                            primary = False
-                            add_item_visible = await frame.wait_for_selector(sel, timeout=t)
+                            add_item_visible = await frame.wait_for_selector('span:has-text("Add Item")', timeout=200)
                             if add_item_visible:
                                 break
                         except Exception:
                             continue
-                    if add_item_visible:
-                        break
                 if not add_item_visible:
                     raise Exception("Add Item button not found")
                 ctx = self._content_frame if self._content_frame else self.page
@@ -488,7 +436,7 @@ class WebAutomationBot:
                 
                 # read available quantity and adjust if needed (use timeout - default is 0 = infinite)
                 try:
-                    el = await ctx.wait_for_selector('span[id="fgvt_Dm-m-1"]', timeout=3000)
+                    el = await ctx.wait_for_selector('span[id="fgvt_Dm-m-1"]', timeout=1000)
                     available_text = await el.text_content() or '0'
                     available_quantity = int(available_text.replace(',', ''))
                     logger.info(f"    Available quantity: {available_quantity}")
@@ -516,65 +464,83 @@ class WebAutomationBot:
                     logger.error(f"Add Item elements: {html_snippet}")
                     raise Exception("Failed to click Add Item - see add_item_fail.png")
                 await self.page.wait_for_load_state('networkidle')
-                await asyncio.sleep(0.4)  # wait for quantity modal to open
+                
+                # Wait for quantity modal to render
+                await asyncio.sleep(0.4)
                 
                 # Type quantity into modal (use adjusted qty if we capped by available), then click Add Item
                 qty_str = str(int(quantity))
                 logger.info(f"    Entering quantity {qty_str} from CSV for item #{item_number}")
                 done = False
                 all_frames = [self.page] + list(self.page.frames)
-                for frame in all_frames:
-                    try:
-                        # Find quantity input - id Ds_1-81, class DocControlQuantity
-                        result = await frame.evaluate(f"""() => {{
-                            const qtyInput = document.querySelector('input[id="Ds_1-81"]') || document.querySelector('input[id^="Ds_1"]') || document.querySelector('input.DocControlQuantity') || document.querySelector('input[name="Ds_1-81"]');
-                            if (!qtyInput || !qtyInput.offsetParent) return false;
-                            qtyInput.focus();
-                            qtyInput.select();
-                            qtyInput.value = '';
-                            qtyInput.value = '{qty_str}';
-                            qtyInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                            qtyInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                            qtyInput.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-                            const dialog = document.querySelector('[role="dialog"]') || document.querySelector('[class*="modal"]') || document;
-                            const btns = dialog.querySelectorAll('button, span, div[role="button"], a');
-                            for (const b of btns) {{
-                                const t = (b.textContent || '').trim();
-                                if (t === 'Add Item' || t === 'OK') {{
-                                    b.click();
-                                    return true;
+                for attempt in range(3):
+                    if done:
+                        break
+                    # Method 1: JS — set quantity and click Add Item in one shot
+                    for frame in all_frames:
+                        try:
+                            result = await frame.evaluate(f"""() => {{
+                                const qtyInput = document.querySelector('input[id="Ds_1-81"]') || document.querySelector('input[id^="Ds_1"]') || document.querySelector('input.DocControlQuantity') || document.querySelector('input[name="Ds_1-81"]');
+                                if (!qtyInput || !qtyInput.offsetParent) return false;
+                                qtyInput.focus();
+                                qtyInput.select();
+                                qtyInput.value = '';
+                                qtyInput.value = '{qty_str}';
+                                qtyInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                qtyInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                qtyInput.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                                const dialog = document.querySelector('[role="dialog"]') || document.querySelector('[class*="modal"]') || document;
+                                const btns = dialog.querySelectorAll('button, span, div[role="button"], a');
+                                for (const b of btns) {{
+                                    const t = (b.textContent || '').trim();
+                                    if (t === 'Add Item' || t === 'OK') {{
+                                        b.click();
+                                        return true;
+                                    }}
                                 }}
-                            }}
-                            return false;
-                        }}""")
-                        if result:
-                            done = True
-                            logger.info(f"    Entered quantity {qty_str} and clicked Add Item")
-                            break
-                    except Exception:
-                        continue
-                if not done:
-                    # Playwright: find quantity input by exact id/class
+                                return false;
+                            }}""")
+                            if result:
+                                done = True
+                                logger.info(f"    Entered quantity {qty_str} and clicked Add Item")
+                                break
+                        except Exception:
+                            continue
+                    if done:
+                        break
+                    # Method 2: Playwright fallback
                     for frame in all_frames:
                         try:
                             qty_input = await frame.query_selector('input[id="Ds_1-81"]') or await frame.query_selector('input[id^="Ds_1"]') or await frame.query_selector('input.DocControlQuantity')
                             if qty_input and await qty_input.is_visible():
                                 await qty_input.click()
                                 await qty_input.fill('')
-                                await qty_input.type(qty_str, delay=20)
-                                await asyncio.sleep(0.1)
+                                await qty_input.type(qty_str, delay=10)
                                 add_btn = await frame.query_selector('[role="dialog"] button:has-text("Add Item"), [role="dialog"] span:has-text("Add Item")') or await frame.query_selector('[role="dialog"] button:has-text("OK"), [role="dialog"] span:has-text("OK")')
                                 if add_btn:
-                                    await add_btn.click()
+                                    await add_btn.click(force=True)
                                     done = True
-                                    logger.info(f"    Entered quantity {qty_str} and clicked Add Item")
+                                    logger.info(f"    Entered quantity {qty_str} and clicked Add Item (Playwright)")
                                     break
                         except Exception:
                             continue
+                    if not done and attempt < 2:
+                        await asyncio.sleep(0.3)
                 if not done:
                     raise Exception("Could not enter quantity and click Add Item")
                 await self.page.wait_for_load_state('networkidle')
-                await asyncio.sleep(0.2)  # wait for modal to close
+                
+                # dismiss any modal/dialog that stays open after adding to cart
+                try:
+                    dismiss_ctx = self._content_frame or self.page
+                    await dismiss_ctx.evaluate("""() => {
+                        document.querySelectorAll('[role="dialog"], .ui-dialog, .DocModalDialog').forEach(d => {
+                            const close = d.querySelector('.ui-dialog-titlebar-close, button[title="Close"], .close');
+                            if (close) close.click();
+                        });
+                    }""")
+                except Exception:
+                    pass
                 
                 # mark item as processed
                 item['order_filled'] = 'yes'
@@ -583,13 +549,10 @@ class WebAutomationBot:
                 logger.info(f"    ✓ Added to cart: {quantity} units (total: {total_qty_added})")
                 
             except Exception as e:
-                logger.error(f"  ✗ Item #{item_number} failed: {e}", exc_info=True)
+                logger.info(f"  ✗ Item #{item_number} not available")
                 try:
                     search_input = await self._get_search_input()
-                    await search_input.click()
-                    await search_input.press('Control+a')
-                    await search_input.press('Backspace')
-                    await asyncio.sleep(0.1)
+                    await search_input.fill('')
                 except Exception:
                     pass
         
@@ -619,40 +582,43 @@ class WebAutomationBot:
                     pass
     
     async def _click_next_or_submit(self, text: str, timeout_ms: int = 3000):
-        """Click Next or Submit - span.ActionButtonCaptionText structure.
-        Scrolls to bottom so buttons are visible, then clicks."""
+        """Click Next or Submit — JS click first (bypasses overlays), then Playwright force-click."""
         await self._scroll_to_bottom()
-        await asyncio.sleep(0.1)
-        await self._scroll_to_bottom()
-        contexts = ([self._content_frame] if self._content_frame else []) + [self.page] + list(self.page.frames)
+        
+        eval_page = self._content_frame if self._content_frame else self.page
+        # JS click — fastest and most reliable, bypasses dialog overlays
+        try:
+            r = await eval_page.evaluate(f"""() => {{
+                const all = document.querySelectorAll('span.ActionButtonCaptionText, span, button');
+                for (const e of all) {{
+                    const t = (e.textContent || '').trim();
+                    if (t === '{text}' && e.offsetParent) {{
+                        const target = e.closest('[data-event]') || e.closest('button') || e.parentElement || e;
+                        target.scrollIntoView({{block: 'center'}});
+                        target.click();
+                        return true;
+                    }}
+                }}
+                return false;
+            }}""")
+            if r:
+                await self.page.wait_for_load_state('networkidle')
+                return True
+        except Exception:
+            pass
+        
+        # Playwright force-click fallback
+        contexts = ([self._content_frame] if self._content_frame else []) + [self.page]
         for ctx in contexts:
-            for sel in [
-                f'span.ActionButtonCaptionText:has-text("{text}")',
-                f'xpath=//span[@class="ActionButtonCaptionText" and contains(., "{text}")]',
-                f'span:has-text("{text}")',
-                f'button:has-text("{text}")',
-            ]:
+            for sel in [f'span.ActionButtonCaptionText:has-text("{text}")', f'button:has-text("{text}")']:
                 try:
                     btn = await ctx.wait_for_selector(sel, timeout=timeout_ms)
-                    if btn and await btn.is_visible():
-                        await btn.scroll_into_view_if_needed()
-                        await btn.click()
+                    if btn:
+                        await btn.click(force=True)
+                        await self.page.wait_for_load_state('networkidle')
                         return True
                 except Exception:
                     continue
-            # try clicking parent via JS (span may be inside button - parent receives click)
-            try:
-                span = await ctx.wait_for_selector(f'span.ActionButtonCaptionText:has-text("{text}")', timeout=timeout_ms)
-                if span and await span.is_visible():
-                    clicked = await span.evaluate("""el => {
-                        const p = el.closest('button, div[role="button"], [class*="ActionButton"], [class*="Button"]') || el.parentElement;
-                        if (p && p.offsetParent) { p.click(); return true; }
-                        return false;
-                    }""")
-                    if clicked:
-                        return True
-            except Exception:
-                pass
         return False
     
     async def _discover_password_inputs(self, ctx=None) -> list:
@@ -1255,6 +1221,7 @@ async def main():
         logger.info("BOT STARTED - Continuously checking for items")
         logger.info("="*60 + "\n")
         
+        consecutive_errors = 0
         while True:
             try:
                 # reload CSV each iteration to get latest data
@@ -1277,6 +1244,7 @@ async def main():
                 
                 # check all items and add available ones to cart (one order, min 10 qty)
                 items_found, total_qty_added = await bot.check_and_process_items(items)
+                consecutive_errors = 0
                 
                 if items_found and total_qty_added >= 10:
                     item_numbers = [str(item['item_number']) for item in items_found]
@@ -1284,7 +1252,10 @@ async def main():
                     await bot.submit_order()
                     
                     update_csv_file(csv_filename, items)
-                    logger.info("Immediately checking for remaining items...")
+                    
+                    remaining = [i for i in items if i.get('order_filled', '').lower() != 'yes']
+                    if not remaining:
+                        logger.info("All items filled!")
                 elif items_found and total_qty_added < 10:
                     logger.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting - will retry.")
                     for item in items_found:
@@ -1295,26 +1266,27 @@ async def main():
                     await asyncio.sleep(1)
             
             except Exception as e:
-                logger.error(f"An error occurred during bot operation: {e}")
-                import traceback
-                traceback.print_exc()
+                consecutive_errors += 1
+                logger.error(f"Error (attempt {consecutive_errors}): {e}")
                 
-                # Try to recover by refreshing the page first (avoids burning a login attempt)
+                if consecutive_errors < 2:
+                    # First failure — try refreshing the page
+                    try:
+                        logger.info("Attempting to recover by refreshing the page...")
+                        await bot.page.reload(wait_until='networkidle', timeout=15000)
+                        await asyncio.sleep(1)
+                        logger.info("Page refreshed, resuming...")
+                        continue
+                    except Exception:
+                        pass
+                
+                # Multiple failures or refresh didn't help — full re-init
+                logger.info("Re-initializing bot (full login)...")
+                consecutive_errors = 0
                 try:
-                    logger.info("Attempting to recover by refreshing the page...")
-                    await bot.page.reload(wait_until='networkidle', timeout=15000)
-                    await asyncio.sleep(1)
-                    current_url = bot.page.url
-                    if 'login' in current_url.lower() or 'auth' in current_url.lower():
-                        raise Exception("Session expired — landed on login page")
-                    logger.info("Page refreshed, resuming...")
-                    continue
+                    await bot.cleanup()
                 except Exception:
                     pass
-                
-                # Refresh failed or session expired — full re-init as last resort
-                logger.info("Refresh failed, re-initializing bot (full login)...")
-                await bot.cleanup()
                 bot = WebAutomationBot(headless=False)
                 await bot.setup(use_saved_auth=True)
                 

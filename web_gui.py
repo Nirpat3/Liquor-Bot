@@ -554,6 +554,7 @@ def run_bot_thread():
                 await bot.setup(use_saved_auth=True)
                 logging.info("Bot ready. If prompted for OTP, complete it in the browser.")
                 
+                consecutive_errors = 0
                 while not stop_event.is_set():
                     try:
                         items = read_csv_file('orders.csv')
@@ -567,19 +568,22 @@ def run_bot_thread():
                         
                         logging.info(f"Checking {len(unfilled_items)} items for availability...")
                         
-                        # Start a new order if not already on the order page
                         current_url = bot.page.url
                         if 'itemEntry' not in current_url:
                             await bot.start_order()
                         
                         items_found, total_qty_added = await bot.check_and_process_items(items)
+                        consecutive_errors = 0
                         
                         if items_found and total_qty_added >= 10:
                             item_numbers = [str(item['item_number']) for item in items_found]
                             logging.info(f"Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
                             await bot.submit_order()
                             update_csv_file('orders.csv', items)
-                            logging.info("Immediately checking for remaining items...")
+                            
+                            remaining = [i for i in items if i.get('order_filled', '').lower() != 'yes']
+                            if not remaining:
+                                logging.info("All items filled!")
                         elif items_found and total_qty_added < 10:
                             logging.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting - will retry.")
                             for item in items_found:
@@ -589,23 +593,21 @@ def run_bot_thread():
                             await asyncio.sleep(1)
                     
                     except Exception as e:
-                        logging.error(f"Error during bot operation: {e}", exc_info=True)
+                        consecutive_errors += 1
+                        logging.error(f"Error (attempt {consecutive_errors}): {e}", exc_info=True)
                         
-                        # Try to recover by refreshing the page first (avoids burning a login attempt)
-                        try:
-                            logging.info("Attempting to recover by refreshing the page...")
-                            await bot.page.reload(wait_until='networkidle', timeout=15000)
-                            await asyncio.sleep(1)
-                            current_url = bot.page.url
-                            if 'login' in current_url.lower() or 'auth' in current_url.lower():
-                                raise Exception("Session expired — landed on login page")
-                            logging.info("Page refreshed, resuming...")
-                            continue
-                        except Exception:
-                            pass
+                        if consecutive_errors < 2:
+                            try:
+                                logging.info("Attempting to recover by refreshing the page...")
+                                await bot.page.reload(wait_until='networkidle', timeout=15000)
+                                await asyncio.sleep(1)
+                                logging.info("Page refreshed, resuming...")
+                                continue
+                            except Exception:
+                                pass
                         
-                        # Refresh failed or session expired — full re-init as last resort
-                        logging.info("Refresh failed, re-initializing bot (full login)...")
+                        logging.info("Re-initializing bot (full login)...")
+                        consecutive_errors = 0
                         try:
                             await bot.cleanup()
                         except Exception:
