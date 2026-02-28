@@ -591,8 +591,21 @@ def run_bot_thread():
                     except Exception as e:
                         logging.error(f"Error during bot operation: {e}", exc_info=True)
                         
-                        # Re-initialize the bot to recover from crash
-                        logging.info("Attempting to recover by re-initializing the bot...")
+                        # Try to recover by refreshing the page first (avoids burning a login attempt)
+                        try:
+                            logging.info("Attempting to recover by refreshing the page...")
+                            await bot.page.reload(wait_until='networkidle', timeout=15000)
+                            await asyncio.sleep(1)
+                            current_url = bot.page.url
+                            if 'login' in current_url.lower() or 'auth' in current_url.lower():
+                                raise Exception("Session expired — landed on login page")
+                            logging.info("Page refreshed, resuming...")
+                            continue
+                        except Exception:
+                            pass
+                        
+                        # Refresh failed or session expired — full re-init as last resort
+                        logging.info("Refresh failed, re-initializing bot (full login)...")
                         try:
                             await bot.cleanup()
                         except Exception:

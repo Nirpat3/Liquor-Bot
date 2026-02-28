@@ -1299,8 +1299,21 @@ async def main():
                 import traceback
                 traceback.print_exc()
                 
-                # Try to re-initialize the bot to recover from a potential crash
-                logger.info("Attempting to recover by re-initializing the bot...")
+                # Try to recover by refreshing the page first (avoids burning a login attempt)
+                try:
+                    logger.info("Attempting to recover by refreshing the page...")
+                    await bot.page.reload(wait_until='networkidle', timeout=15000)
+                    await asyncio.sleep(1)
+                    current_url = bot.page.url
+                    if 'login' in current_url.lower() or 'auth' in current_url.lower():
+                        raise Exception("Session expired — landed on login page")
+                    logger.info("Page refreshed, resuming...")
+                    continue
+                except Exception:
+                    pass
+                
+                # Refresh failed or session expired — full re-init as last resort
+                logger.info("Refresh failed, re-initializing bot (full login)...")
                 await bot.cleanup()
                 bot = WebAutomationBot(headless=False)
                 await bot.setup(use_saved_auth=True)
