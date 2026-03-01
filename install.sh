@@ -146,6 +146,12 @@ print_ok "Python dependencies installed"
 # ── Step 5: Playwright Chromium ──
 print_step 5 "Installing Playwright Chromium browser..."
 
+# Remove old cached browsers to ensure exact version match
+if [[ -d "$HOME/Library/Caches/ms-playwright" ]]; then
+    rm -rf "$HOME/Library/Caches/ms-playwright"
+    print_ok "Cleared old browser cache"
+fi
+
 playwright install chromium
 print_ok "Chromium browser installed"
 

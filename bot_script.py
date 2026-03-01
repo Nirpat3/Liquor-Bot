@@ -258,11 +258,8 @@ class WebAutomationBot:
         await self.page.wait_for_load_state('networkidle')
         await asyncio.sleep(0.3)
         
-        # click on manually enter items button (Dr-p on user machine, Dl-q on dev)
-        try:
-            await self.page.click('input[type="radio"][id="Dr-p"]', timeout=2000)
-        except Exception:
-            await self.page.click('input[type="radio"][id="Dl-q"]', timeout=2000)
+        # click on manually enter items button
+        await self.page.get_by_label("Manually Enter Items").click()
         
         await asyncio.sleep(0.2)
         
