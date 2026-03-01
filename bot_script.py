@@ -256,49 +256,92 @@ class WebAutomationBot:
         # clicking add order
         await self.page.click('span:has-text("Add Order")')
         await self.page.wait_for_load_state('networkidle')
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(1)
         
-        # click on manually enter items button — scan all frames for the text
+        # click on manually enter items - try multiple selectors (IDs can be dynamic)
         manually_clicked = False
-        for frame in [self.page] + list(self.page.frames):
+        
+        for locator in [
+            self.page.get_by_label("Manually Enter Items"),
+            self.page.get_by_label("Manually enter items"),
+            self.page.get_by_role("radio", name="Manually Enter Items"),
+            self.page.get_by_role("radio", name="Manually enter items"),
+        ]:
             try:
-                result = await frame.evaluate("""() => {
-                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-                    while (walker.nextNode()) {
-                        const text = walker.currentNode.textContent.trim().toLowerCase();
-                        if (text.includes('manually enter items') || text.includes('manually enter')) {
-                            const el = walker.currentNode.parentElement;
-                            const label = el.closest('label') || el;
-                            // try: radio inside label, radio via for attr, previous sibling, parent's previous sibling
-                            const radio = label.querySelector('input[type="radio"]')
-                                || (label.htmlFor ? document.getElementById(label.htmlFor) : null)
-                                || label.previousElementSibling
-                                || label.parentElement.querySelector('input[type="radio"]');
-                            if (radio && radio.type === 'radio') {
-                                radio.click();
-                                radio.checked = true;
-                                radio.dispatchEvent(new Event('change', {bubbles: true}));
-                                return 'clicked radio';
-                            }
-                            el.click();
-                            return 'clicked element';
-                        }
-                    }
-                    return null;
-                }""")
-                if result:
+                if await locator.count() > 0:
+                    await locator.first.click()
                     manually_clicked = True
-                    logger.info(f"Selected manually enter items ({result})")
+                    logger.info("Selected manually enter items (label/role)")
                     break
             except Exception:
                 continue
         
         if not manually_clicked:
-            await self.page.screenshot(path="manually_enter_debug.png")
-            logger.error("Could not find 'Manually Enter Items' — screenshot saved to manually_enter_debug.png")
-            raise Exception("Could not find 'Manually Enter Items' on page or any iframe")
+            for selector in [
+                'label:has-text("Manually Enter")',
+                'label:has-text("Manually enter")',
+                'label:has-text("Manually")',
+                'span:has-text("Manually Enter")',
+                'span:has-text("Manual Entry")',
+            ]:
+                try:
+                    el = await self.page.wait_for_selector(selector, timeout=2000)
+                    if el:
+                        await el.click()
+                        manually_clicked = True
+                        logger.info(f"Selected manually enter items via: {selector}")
+                        break
+                except Exception:
+                    continue
         
-        await asyncio.sleep(0.2)
+        if not manually_clicked:
+            for frame in [self.page] + list(self.page.frames):
+                try:
+                    result = await frame.evaluate("""() => {
+                        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                        while (walker.nextNode()) {
+                            const text = walker.currentNode.textContent.trim().toLowerCase();
+                            if (text.includes('manually enter items') || text.includes('manually enter')) {
+                                const el = walker.currentNode.parentElement;
+                                const label = el.closest('label') || el;
+                                const radio = label.querySelector('input[type="radio"]')
+                                    || (label.htmlFor ? document.getElementById(label.htmlFor) : null)
+                                    || label.previousElementSibling
+                                    || label.parentElement.querySelector('input[type="radio"]');
+                                if (radio && radio.type === 'radio') {
+                                    radio.click();
+                                    radio.checked = true;
+                                    radio.dispatchEvent(new Event('change', {bubbles: true}));
+                                    return 'clicked radio';
+                                }
+                                el.click();
+                                return 'clicked element';
+                            }
+                        }
+                        return null;
+                    }""")
+                    if result:
+                        manually_clicked = True
+                        logger.info(f"Selected manually enter items ({result})")
+                        break
+                except Exception:
+                    continue
+        
+        if not manually_clicked:
+            try:
+                radios = await self.page.query_selector_all('input[type="radio"]')
+                if radios:
+                    await radios[0].click()
+                    manually_clicked = True
+                    logger.info("Selected first radio option (manually enter)")
+            except Exception as e:
+                logger.warning(f"Radio fallback failed: {e}")
+        
+        if not manually_clicked:
+            await self.page.screenshot(path="manually_enter_debug.png")
+            raise Exception("Could not find/click 'Manually Enter Items' option")
+        
+        await asyncio.sleep(0.5)
         
         # click next button to go to item entry page
         await self._scroll_to_bottom()
