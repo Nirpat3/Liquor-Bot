@@ -258,25 +258,45 @@ class WebAutomationBot:
         await self.page.wait_for_load_state('networkidle')
         await asyncio.sleep(0.3)
         
-        # click on manually enter items button — scan page for the text and click its radio
-        await self.page.evaluate("""() => {
-            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-            while (walker.nextNode()) {
-                if (walker.currentNode.textContent.trim().toLowerCase().includes('manually enter items')) {
-                    const label = walker.currentNode.parentElement.closest('label') || walker.currentNode.parentElement;
-                    const radio = label.querySelector('input[type="radio"]') ||
-                                  (label.htmlFor ? document.getElementById(label.htmlFor) : null) ||
-                                  label.previousElementSibling;
-                    if (radio && radio.tagName === 'INPUT') {
-                        radio.click();
-                        return;
+        # click on manually enter items button — scan all frames for the text
+        manually_clicked = False
+        for frame in [self.page] + list(self.page.frames):
+            try:
+                result = await frame.evaluate("""() => {
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                    while (walker.nextNode()) {
+                        const text = walker.currentNode.textContent.trim().toLowerCase();
+                        if (text.includes('manually enter items') || text.includes('manually enter')) {
+                            const el = walker.currentNode.parentElement;
+                            const label = el.closest('label') || el;
+                            // try: radio inside label, radio via for attr, previous sibling, parent's previous sibling
+                            const radio = label.querySelector('input[type="radio"]')
+                                || (label.htmlFor ? document.getElementById(label.htmlFor) : null)
+                                || label.previousElementSibling
+                                || label.parentElement.querySelector('input[type="radio"]');
+                            if (radio && radio.type === 'radio') {
+                                radio.click();
+                                radio.checked = true;
+                                radio.dispatchEvent(new Event('change', {bubbles: true}));
+                                return 'clicked radio';
+                            }
+                            el.click();
+                            return 'clicked element';
+                        }
                     }
-                    label.click();
-                    return;
-                }
-            }
-            throw new Error('Could not find Manually Enter Items on page');
-        }""")
+                    return null;
+                }""")
+                if result:
+                    manually_clicked = True
+                    logger.info(f"Selected manually enter items ({result})")
+                    break
+            except Exception:
+                continue
+        
+        if not manually_clicked:
+            await self.page.screenshot(path="manually_enter_debug.png")
+            logger.error("Could not find 'Manually Enter Items' — screenshot saved to manually_enter_debug.png")
+            raise Exception("Could not find 'Manually Enter Items' on page or any iframe")
         
         await asyncio.sleep(0.2)
         
