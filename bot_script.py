@@ -280,6 +280,7 @@ class WebAutomationBot:
         if not manually_clicked:
             for selector in [
                 'input[type="radio"][id="Dl-q"]',
+                'input[type="radio"][id="Dr-p"]',
                 'label:has-text("Manually Enter")',
                 'label:has-text("Manually enter")',
                 'label:has-text("Manual Entry")',
@@ -296,6 +297,20 @@ class WebAutomationBot:
                         break
                 except Exception:
                     continue
+        
+        if not manually_clicked:
+            try:
+                radios = await self.page.query_selector_all('input.DocControlRadioButton.FastToggleInputRadioButton')
+                if len(radios) >= 2:
+                    await radios[1].click()
+                    manually_clicked = True
+                    logger.info("Selected second DocControlRadioButton (class-based)")
+                elif radios:
+                    await radios[0].click()
+                    manually_clicked = True
+                    logger.info("Selected only DocControlRadioButton found")
+            except Exception as e:
+                logger.warning(f"Class-based radio fallback failed: {e}")
         
         if not manually_clicked:
             try:
