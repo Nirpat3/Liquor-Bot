@@ -258,11 +258,10 @@ class WebAutomationBot:
         await self.page.wait_for_load_state('networkidle')
         await asyncio.sleep(0.3)
         
-        # click on manually enter items (second radio button on the page)
+        # click on manually enter items - try multiple selectors (IDs can be dynamic)
         manually_clicked = False
-        all_contexts = [self.page] + list(self.page.frames)
         
-        # Strategy 1: Playwright locators — exact text match
+        # try Playwright's robust locators first
         for locator in [
             self.page.get_by_label("Manually Enter Items"),
             self.page.get_by_label("Manually enter items"),
@@ -271,72 +270,72 @@ class WebAutomationBot:
         ]:
             try:
                 if await locator.count() > 0:
-                    await locator.first.scroll_into_view_if_needed()
-                    await locator.first.click(force=True)
+                    await locator.first.click()
                     manually_clicked = True
-                    logger.info("Selected manually enter items (Playwright locator)")
+                    logger.info("Selected manually enter items (label/role)")
                     break
             except Exception:
                 continue
         
-        # Strategy 2: JS click — find the radio whose label contains "manually"
         if not manually_clicked:
-            for ctx in all_contexts:
+            for selector in [
+                'input[type="radio"][id="Dl-q"]',
+                'label:has-text("Manually Enter")',
+                'label:has-text("Manually enter")',
+                'label:has-text("Manual Entry")',
+                'label:has-text("Manually")',
+                'span:has-text("Manually Enter")',
+                'span:has-text("Manual Entry")',
+            ]:
                 try:
-                    result = await ctx.evaluate("""() => {
-                        const labels = document.querySelectorAll('label, span');
-                        for (const el of labels) {
-                            const t = (el.textContent || '').trim().toLowerCase();
-                            if (t.includes('manually') && t.includes('enter') && el.offsetParent) {
-                                el.scrollIntoView({block: 'center'});
-                                const radio = el.querySelector('input[type="radio"]') ||
-                                              (el.htmlFor ? document.getElementById(el.htmlFor) : null);
-                                if (radio) {
-                                    radio.click();
-                                    radio.checked = true;
-                                    radio.dispatchEvent(new Event('change', {bubbles: true}));
-                                    return 'radio';
-                                }
-                                el.click();
-                                return 'element';
-                            }
-                        }
-                        return null;
-                    }""")
-                    if result:
+                    el = await self.page.wait_for_selector(selector, timeout=500)
+                    if el:
+                        await el.click()
                         manually_clicked = True
-                        logger.info(f"Selected manually enter items (JS {result})")
+                        logger.info(f"Selected manually enter items via: {selector}")
                         break
                 except Exception:
                     continue
         
-        # Strategy 3: click the second visible radio button (known position)
         if not manually_clicked:
-            for ctx in all_contexts:
-                try:
-                    radios = await ctx.query_selector_all('input[type="radio"]')
-                    visible_radios = []
-                    for radio in radios:
-                        if await radio.is_visible():
-                            visible_radios.append(radio)
-                    if len(visible_radios) >= 2:
-                        await visible_radios[1].scroll_into_view_if_needed()
-                        await visible_radios[1].click(force=True)
+            try:
+                radios = await self.page.query_selector_all('input[type="radio"]')
+                for i, radio in enumerate(radios):
+                    label_text = await self.page.evaluate("""(el) => {
+                        if (el.id) {
+                            const lbl = document.querySelector('label[for="' + el.id + '"]');
+                            if (lbl) return lbl.textContent.trim();
+                        }
+                        const parent = el.closest('label');
+                        if (parent) return parent.textContent.trim();
+                        const sib = el.nextElementSibling || el.parentElement;
+                        return sib ? sib.textContent.trim() : '';
+                    }""", radio)
+                    logger.info(f"Radio {i}: '{label_text}'")
+                    if 'manually' in label_text.lower():
+                        await radio.click()
                         manually_clicked = True
-                        logger.info("Selected second radio option (manually enter)")
+                        logger.info(f"Selected radio {i} by label text match")
                         break
-                    elif visible_radios:
-                        await visible_radios[0].scroll_into_view_if_needed()
-                        await visible_radios[0].click(force=True)
-                        manually_clicked = True
-                        logger.info("Selected first radio option (only one found)")
-                        break
-                except Exception:
-                    continue
+            except Exception as e:
+                logger.warning(f"Radio text-match fallback failed: {e}")
+
+        if not manually_clicked:
+            try:
+                radios = await self.page.query_selector_all('input[type="radio"]')
+                if len(radios) >= 2:
+                    await radios[1].click()
+                    manually_clicked = True
+                    logger.info("Selected second radio (position fallback)")
+                elif radios:
+                    await radios[0].click()
+                    manually_clicked = True
+                    logger.info("Selected only radio found (position fallback)")
+            except Exception as e:
+                logger.warning(f"Radio position fallback failed: {e}")
         
         if not manually_clicked:
             await self.page.screenshot(path="manually_enter_fail.png")
-            logger.error("Could not find 'Manually Enter Items' — see manually_enter_fail.png")
             raise Exception("Could not find/click 'Manually Enter Items' option")
         
         await asyncio.sleep(0.2)
