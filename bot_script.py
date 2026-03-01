@@ -258,8 +258,25 @@ class WebAutomationBot:
         await self.page.wait_for_load_state('networkidle')
         await asyncio.sleep(0.3)
         
-        # click on manually enter items button
-        await self.page.get_by_label("Manually Enter Items").click()
+        # click on manually enter items button — scan page for the text and click its radio
+        await self.page.evaluate("""() => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+                if (walker.currentNode.textContent.trim().toLowerCase().includes('manually enter items')) {
+                    const label = walker.currentNode.parentElement.closest('label') || walker.currentNode.parentElement;
+                    const radio = label.querySelector('input[type="radio"]') ||
+                                  (label.htmlFor ? document.getElementById(label.htmlFor) : null) ||
+                                  label.previousElementSibling;
+                    if (radio && radio.tagName === 'INPUT') {
+                        radio.click();
+                        return;
+                    }
+                    label.click();
+                    return;
+                }
+            }
+            throw new Error('Could not find Manually Enter Items on page');
+        }""")
         
         await asyncio.sleep(0.2)
         
