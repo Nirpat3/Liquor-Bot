@@ -258,100 +258,11 @@ class WebAutomationBot:
         await self.page.wait_for_load_state('networkidle')
         await asyncio.sleep(0.3)
         
-        # click on manually enter items - try multiple selectors (IDs can be dynamic)
-        manually_clicked = False
-        
-        # try Playwright's robust locators first
-        for locator in [
-            self.page.get_by_label("Manually Enter Items"),
-            self.page.get_by_label("Manually enter items"),
-            self.page.get_by_role("radio", name="Manually Enter Items"),
-            self.page.get_by_role("radio", name="Manually enter items"),
-        ]:
-            try:
-                if await locator.count() > 0:
-                    await locator.first.click()
-                    manually_clicked = True
-                    logger.info("Selected manually enter items (label/role)")
-                    break
-            except Exception:
-                continue
-        
-        if not manually_clicked:
-            for selector in [
-                'input[type="radio"][id="Dl-q"]',
-                'input[type="radio"][id="Dr-p"]',
-                'label:has-text("Manually Enter")',
-                'label:has-text("Manually enter")',
-                'label:has-text("Manual Entry")',
-                'label:has-text("Manually")',
-                'span:has-text("Manually Enter")',
-                'span:has-text("Manual Entry")',
-            ]:
-                try:
-                    el = await self.page.wait_for_selector(selector, timeout=500)
-                    if el:
-                        await el.click()
-                        manually_clicked = True
-                        logger.info(f"Selected manually enter items via: {selector}")
-                        break
-                except Exception:
-                    continue
-        
-        if not manually_clicked:
-            try:
-                radios = await self.page.query_selector_all('input.DocControlRadioButton.FastToggleInputRadioButton')
-                if len(radios) >= 2:
-                    await radios[1].click()
-                    manually_clicked = True
-                    logger.info("Selected second DocControlRadioButton (class-based)")
-                elif radios:
-                    await radios[0].click()
-                    manually_clicked = True
-                    logger.info("Selected only DocControlRadioButton found")
-            except Exception as e:
-                logger.warning(f"Class-based radio fallback failed: {e}")
-        
-        if not manually_clicked:
-            try:
-                radios = await self.page.query_selector_all('input[type="radio"]')
-                for i, radio in enumerate(radios):
-                    label_text = await self.page.evaluate("""(el) => {
-                        if (el.id) {
-                            const lbl = document.querySelector('label[for="' + el.id + '"]');
-                            if (lbl) return lbl.textContent.trim();
-                        }
-                        const parent = el.closest('label');
-                        if (parent) return parent.textContent.trim();
-                        const sib = el.nextElementSibling || el.parentElement;
-                        return sib ? sib.textContent.trim() : '';
-                    }""", radio)
-                    logger.info(f"Radio {i}: '{label_text}'")
-                    if 'manually' in label_text.lower():
-                        await radio.click()
-                        manually_clicked = True
-                        logger.info(f"Selected radio {i} by label text match")
-                        break
-            except Exception as e:
-                logger.warning(f"Radio text-match fallback failed: {e}")
-
-        if not manually_clicked:
-            try:
-                radios = await self.page.query_selector_all('input[type="radio"]')
-                if len(radios) >= 2:
-                    await radios[1].click()
-                    manually_clicked = True
-                    logger.info("Selected second radio (position fallback)")
-                elif radios:
-                    await radios[0].click()
-                    manually_clicked = True
-                    logger.info("Selected only radio found (position fallback)")
-            except Exception as e:
-                logger.warning(f"Radio position fallback failed: {e}")
-        
-        if not manually_clicked:
-            await self.page.screenshot(path="manually_enter_fail.png")
-            raise Exception("Could not find/click 'Manually Enter Items' option")
+        # click on manually enter items button
+        try:
+            await self.page.click('input[type="radio"][id="Dl-q"]', timeout=2000)
+        except Exception:
+            await self.page.click('input[type="radio"][id="Dr-p"]', timeout=2000)
         
         await asyncio.sleep(0.2)
         
