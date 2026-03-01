@@ -1036,6 +1036,7 @@ def run_bot_thread():
                 logging.info("Bot ready. If prompted for OTP, complete it in the browser.")
                 
                 consecutive_errors = 0
+                on_item_entry = False
                 while not stop_event.is_set():
                     try:
                         items = read_csv_file('orders.csv')
@@ -1045,13 +1046,14 @@ def run_bot_thread():
                         if not unfilled_items:
                             logging.info("All items completed! Checking for new items in 5 seconds...")
                             await asyncio.sleep(5)
+                            on_item_entry = False
                             continue
                         
-                        logging.info(f"Checking {len(unfilled_items)} items for availability...")
-                        
-                        current_url = bot.page.url
-                        if 'itemEntry' not in current_url:
+                        if not on_item_entry or 'itemEntry' not in bot.page.url:
                             await bot.start_order()
+                            on_item_entry = True
+                        
+                        logging.info(f"Checking {len(unfilled_items)} items for availability...")
                         
                         items_found, total_qty_added = await bot.check_and_process_items(items)
                         consecutive_errors = 0
@@ -1061,6 +1063,7 @@ def run_bot_thread():
                             logging.info(f"Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
                             await bot.submit_order()
                             update_csv_file('orders.csv', items)
+                            on_item_entry = False
                             
                             remaining = [i for i in items if i.get('order_filled', '').lower() != 'yes']
                             if not remaining:
@@ -1070,25 +1073,26 @@ def run_bot_thread():
                             for item in items_found:
                                 item['order_filled'] = ''
                         else:
-                            logging.info("No items available. Checking again in 1 second...")
+                            logging.info("No items available. Re-checking all items...")
                             await asyncio.sleep(1)
                     
                     except Exception as e:
                         consecutive_errors += 1
                         logging.error(f"Error (attempt {consecutive_errors}): {e}", exc_info=True)
                         
-                        if consecutive_errors < 2:
+                        if consecutive_errors < 3:
                             try:
-                                logging.info("Attempting to recover by refreshing the page...")
-                                await bot.page.reload(wait_until='networkidle', timeout=15000)
-                                await asyncio.sleep(1)
-                                logging.info("Page refreshed, resuming...")
+                                logging.info("Attempting to recover — navigating to item entry...")
+                                await bot.start_order()
+                                on_item_entry = True
+                                logging.info("Recovered, resuming item checks...")
                                 continue
                             except Exception:
                                 pass
                         
                         logging.info("Re-initializing bot (full login)...")
                         consecutive_errors = 0
+                        on_item_entry = False
                         try:
                             await bot.cleanup()
                         except Exception:

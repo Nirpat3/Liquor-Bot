@@ -403,13 +403,20 @@ class WebAutomationBot:
                 pass
             
             logger.info(f"Checking item #{item_number}...")
-            search_input = await self._get_search_input()
-            await search_input.click(force=True)
-            await search_input.fill('')
-            await search_input.type(str(item_number), delay=10)
-            
-            await search_input.press('Enter')
-            await self.page.wait_for_load_state('networkidle')
+            for input_attempt in range(3):
+                try:
+                    search_input = await self._get_search_input()
+                    await search_input.click(force=True)
+                    await search_input.fill('')
+                    await search_input.type(str(item_number), delay=10)
+                    await search_input.press('Enter')
+                    await self.page.wait_for_load_state('networkidle')
+                    break
+                except Exception:
+                    if input_attempt < 2:
+                        await asyncio.sleep(0.3)
+                        continue
+                    raise
             
             # check if Add Item button appears (indicates item is available)
             try:
@@ -1222,27 +1229,24 @@ async def main():
         logger.info("="*60 + "\n")
         
         consecutive_errors = 0
+        on_item_entry = False
         while True:
             try:
-                # reload CSV each iteration to get latest data
                 items = read_csv_file(csv_filename)
-                
-                # get unfilled items
                 unfilled_items = [item for item in items if item.get('order_filled', '').lower() != 'yes']
                 
                 if not unfilled_items:
                     logger.info("All items completed! Checking for new items in 5 seconds...")
                     await asyncio.sleep(5)
+                    on_item_entry = False
                     continue
+                
+                if not on_item_entry or 'itemEntry' not in bot.page.url:
+                    await bot.start_order()
+                    on_item_entry = True
                 
                 logger.info(f"\n--- Checking {len(unfilled_items)} items for availability ---")
                 
-                # Start a new order only if we are not already on the order page
-                current_url = bot.page.url
-                if not "itemEntry" in current_url:
-                    await bot.start_order()
-                
-                # check all items and add available ones to cart (one order, min 10 qty)
                 items_found, total_qty_added = await bot.check_and_process_items(items)
                 consecutive_errors = 0
                 
@@ -1250,8 +1254,8 @@ async def main():
                     item_numbers = [str(item['item_number']) for item in items_found]
                     logger.info(f"\n✓ Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
                     await bot.submit_order()
-                    
                     update_csv_file(csv_filename, items)
+                    on_item_entry = False
                     
                     remaining = [i for i in items if i.get('order_filled', '').lower() != 'yes']
                     if not remaining:
@@ -1261,28 +1265,26 @@ async def main():
                     for item in items_found:
                         item['order_filled'] = ''
                 else:
-                    # no items found - wait 1 second before checking again
-                    logger.info("No items available. Checking again in 1 second...")
+                    logger.info("No items available. Re-checking all items...")
                     await asyncio.sleep(1)
             
             except Exception as e:
                 consecutive_errors += 1
                 logger.error(f"Error (attempt {consecutive_errors}): {e}")
                 
-                if consecutive_errors < 2:
-                    # First failure — try refreshing the page
+                if consecutive_errors < 3:
                     try:
-                        logger.info("Attempting to recover by refreshing the page...")
-                        await bot.page.reload(wait_until='networkidle', timeout=15000)
-                        await asyncio.sleep(1)
-                        logger.info("Page refreshed, resuming...")
+                        logger.info("Attempting to recover — navigating to item entry...")
+                        await bot.start_order()
+                        on_item_entry = True
+                        logger.info("Recovered, resuming item checks...")
                         continue
                     except Exception:
                         pass
                 
-                # Multiple failures or refresh didn't help — full re-init
                 logger.info("Re-initializing bot (full login)...")
                 consecutive_errors = 0
+                on_item_entry = False
                 try:
                     await bot.cleanup()
                 except Exception:
