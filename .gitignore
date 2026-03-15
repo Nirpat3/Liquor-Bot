@@ -28,5 +28,7 @@ env/
 Order Data/*.ods
 Order Data/FutureSPA/*.ods
 Order Data/CurrentPrices/*.ods
+Order Data/SalesData/*
+!Order Data/SalesData/.gitkeep
 orders.csv
 specialorder.csv
