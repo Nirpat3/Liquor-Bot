@@ -360,6 +360,7 @@ fi
 
 # Ensure Order Data folders exist
 mkdir -p "$INSTALL_DIR/Order Data/FutureSPA"
+mkdir -p "$INSTALL_DIR/Order Data/CurrentPrices"
 print_ok "Order Data folders ready"
 
 # Also create an uninstall script

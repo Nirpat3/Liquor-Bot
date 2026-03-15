@@ -27,5 +27,6 @@ env/
 # Data files (user-managed, not tracked)
 Order Data/*.ods
 Order Data/FutureSPA/*.ods
+Order Data/CurrentPrices/*.ods
 orders.csv
 specialorder.csv

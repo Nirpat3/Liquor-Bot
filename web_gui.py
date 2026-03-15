@@ -159,6 +159,7 @@ HTML_TEMPLATE = '''
             <div id="order-files-list" style="background:#f0f0f0; padding:10px; border-radius:5px; margin-bottom:20px; max-height:200px; overflow-y:auto;"></div>
             <div style="margin-bottom:10px;">
                 <label style="cursor:pointer;"><input type="checkbox" id="include-special-orders" checked> Include Special Orders (specialorder.csv)</label>
+                <label style="margin-left:15px; cursor:pointer;"><input type="checkbox" id="include-current-prices" checked> Include Current Prices (Available Qty)</label>
             </div>
             <div id="order-data-status" style="margin-bottom:10px; font-weight:bold;"></div>
             <div style="margin-bottom:10px;">
@@ -169,6 +170,7 @@ HTML_TEMPLATE = '''
                     <thead>
                         <tr>
                             <th style="cursor:pointer;" onclick="sortOrderResults('item_num')">Item # ⇅</th>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('available')">Available ⇅</th>
                             <th>Qty Reserved</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('name')">Name ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('source_file')">Source ⇅</th>
@@ -434,6 +436,7 @@ HTML_TEMPLATE = '''
         function searchOrderData() {
             const selected = Array.from(document.querySelectorAll('.order-file-cb:checked')).map(c => c.value);
             const includeSpecial = document.getElementById('include-special-orders').checked;
+            const includeCurrentPrices = document.getElementById('include-current-prices').checked;
             if (selected.length === 0 && !includeSpecial) {
                 alert('Please select at least one file or include special orders.');
                 return;
@@ -444,7 +447,7 @@ HTML_TEMPLATE = '''
             fetch('/search_order_data', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({files: selected, include_special: includeSpecial})
+                body: JSON.stringify({files: selected, include_special: includeSpecial, include_current_prices: includeCurrentPrices})
             })
             .then(r => r.json())
             .then(data => {
@@ -492,6 +495,7 @@ HTML_TEMPLATE = '''
                 return `
                 <tr style="${rowStyle}">
                     <td>${item.item_num}</td>
+                    <td>${item.available || ''}</td>
                     <td>${item.qty_reserved}</td>
                     <td>${item.name}</td>
                     <td>${item.source_file}</td>
@@ -911,6 +915,39 @@ def delete_special_order():
     return jsonify({'success': True})
 
 FUTURE_SPA_DIR = ORDER_DATA_DIR / 'FutureSPA'
+CURRENT_PRICES_DIR = ORDER_DATA_DIR / 'CurrentPrices'
+
+def _load_current_prices():
+    """Load CurrentPrices data into a dict keyed by item code."""
+    prices = {}
+    if not CURRENT_PRICES_DIR.exists():
+        return prices
+    for f in CURRENT_PRICES_DIR.iterdir():
+        if f.suffix.lower() != '.ods':
+            continue
+        try:
+            doc = load_ods(str(f))
+        except Exception:
+            continue
+        for sheet in doc.body.getElementsByType(Table):
+            rows = sheet.getElementsByType(TableRow)
+            if not rows:
+                continue
+            for row in rows[1:]:
+                cells = row.getElementsByType(TableCell)
+                vals = []
+                for cell in cells:
+                    repeat = int(cell.getAttribute('numbercolumnsrepeated') or 1)
+                    ps = cell.getElementsByType(P)
+                    text = ''.join(p.firstChild.data if p.firstChild else '' for p in ps)
+                    vals.extend([text] * min(repeat, 20))
+                if len(vals) >= 4 and vals[0].strip():
+                    item_code = vals[0].strip()
+                    prices[item_code] = {
+                        'name': vals[1].strip() if len(vals) > 1 else '',
+                        'available': vals[3].strip() if len(vals) > 3 else '',
+                    }
+    return prices
 
 def _load_future_spa():
     """Load FutureSPA data into a dict keyed by item code."""
@@ -950,8 +987,10 @@ def _load_future_spa():
 def search_order_data():
     selected = request.json.get('files', [])
     include_special = request.json.get('include_special', False)
+    include_current_prices = request.json.get('include_current_prices', False)
 
     spa_lookup = _load_future_spa()
+    prices_lookup = _load_current_prices() if include_current_prices else {}
 
     all_rows = []
     for fname in selected:
@@ -972,6 +1011,8 @@ def search_order_data():
             row['spa_price'] = spa.get('spa_price', '')
             row['spa_discount'] = spa.get('spa_discount', '')
             row['spa_sort_date'] = spa.get('spa_date', '')
+            cp = prices_lookup.get(row['item_num'], {})
+            row['available'] = cp.get('available', '')
             all_rows.append(row)
 
     if include_special and SPECIAL_ORDER_CSV.exists():
@@ -980,6 +1021,7 @@ def search_order_data():
             if not item_num:
                 continue
             spa = spa_lookup.get(item_num, {})
+            cp = prices_lookup.get(item_num, {})
             all_rows.append({
                 'item_num': item_num,
                 'name': srow.get('name', '').strip(),
@@ -990,11 +1032,13 @@ def search_order_data():
                 'spa_price': spa.get('spa_price', ''),
                 'spa_discount': spa.get('spa_discount', ''),
                 'spa_sort_date': spa.get('spa_date', ''),
+                'available': cp.get('available', ''),
             })
 
     seen_items = set(row['item_num'] for row in all_rows)
     for item_code, spa in spa_lookup.items():
         if item_code not in seen_items:
+            cp = prices_lookup.get(item_code, {})
             all_rows.append({
                 'item_num': item_code,
                 'name': spa.get('name', ''),
@@ -1005,6 +1049,7 @@ def search_order_data():
                 'spa_price': spa.get('spa_price', ''),
                 'spa_discount': spa.get('spa_discount', ''),
                 'spa_sort_date': spa.get('spa_date', ''),
+                'available': cp.get('available', ''),
             })
 
     all_rows.sort(key=lambda x: x.get('sort_date', ''), reverse=True)
