@@ -158,6 +158,7 @@ Write-Step 6 "Creating desktop shortcut and data folders..."
 # Create data folders
 New-Item -ItemType Directory -Force -Path "$InstallDir\Order Data\FutureSPA" | Out-Null
 New-Item -ItemType Directory -Force -Path "$InstallDir\Order Data\CurrentPrices" | Out-Null
+New-Item -ItemType Directory -Force -Path "$InstallDir\Order Data\SalesData" | Out-Null
 Write-Ok "Order Data folders ready"
 
 # Create .env template if it doesn't exist
