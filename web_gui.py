@@ -158,8 +158,9 @@ HTML_TEMPLATE = '''
             </div>
             <div id="order-files-list" style="background:#f0f0f0; padding:10px; border-radius:5px; margin-bottom:20px; max-height:200px; overflow-y:auto;"></div>
             <div style="margin-bottom:10px;">
-                <label style="cursor:pointer;"><input type="checkbox" id="include-special-orders" checked> Include Special Orders (specialorder.csv)</label>
-                <label style="margin-left:15px; cursor:pointer;"><input type="checkbox" id="include-current-prices" checked> Include Current Prices (Available Qty)</label>
+                <label style="cursor:pointer;"><input type="checkbox" id="include-special-orders" checked> Include Special Orders</label>
+                <label style="margin-left:15px; cursor:pointer;"><input type="checkbox" id="include-current-prices" checked> Include Current Prices</label>
+                <label style="margin-left:15px; cursor:pointer;"><input type="checkbox" id="include-sales-data" checked> Include Sales Data</label>
             </div>
             <div id="order-data-status" style="margin-bottom:10px; font-weight:bold;"></div>
             <div style="margin-bottom:10px;">
@@ -172,6 +173,8 @@ HTML_TEMPLATE = '''
                             <th style="cursor:pointer;" onclick="sortOrderResults('item_num')">Item # ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('available')">Available ⇅</th>
                             <th>Qty Reserved</th>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('units_sold')">Units Sold ⇅</th>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('qty_on_hand')">Qty On Hand ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('name')">Name ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('source_file')">Source ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('spa_date')">Sale Date ⇅</th>
@@ -437,6 +440,7 @@ HTML_TEMPLATE = '''
             const selected = Array.from(document.querySelectorAll('.order-file-cb:checked')).map(c => c.value);
             const includeSpecial = document.getElementById('include-special-orders').checked;
             const includeCurrentPrices = document.getElementById('include-current-prices').checked;
+            const includeSalesData = document.getElementById('include-sales-data').checked;
             if (selected.length === 0 && !includeSpecial) {
                 alert('Please select at least one file or include special orders.');
                 return;
@@ -447,7 +451,7 @@ HTML_TEMPLATE = '''
             fetch('/search_order_data', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({files: selected, include_special: includeSpecial, include_current_prices: includeCurrentPrices})
+                body: JSON.stringify({files: selected, include_special: includeSpecial, include_current_prices: includeCurrentPrices, include_sales_data: includeSalesData})
             })
             .then(r => r.json())
             .then(data => {
@@ -497,6 +501,8 @@ HTML_TEMPLATE = '''
                     <td>${item.item_num}</td>
                     <td>${item.available || ''}</td>
                     <td>${item.qty_reserved}</td>
+                    <td>${item.units_sold || ''}</td>
+                    <td>${item.qty_on_hand || ''}</td>
                     <td>${item.name}</td>
                     <td>${item.source_file}</td>
                     <td>${item.spa_date || ''}</td>
@@ -916,6 +922,7 @@ def delete_special_order():
 
 FUTURE_SPA_DIR = ORDER_DATA_DIR / 'FutureSPA'
 CURRENT_PRICES_DIR = ORDER_DATA_DIR / 'CurrentPrices'
+SALES_DATA_DIR = ORDER_DATA_DIR / 'SalesData'
 
 def _load_current_prices():
     """Load CurrentPrices data into a dict keyed by item code."""
@@ -948,6 +955,69 @@ def _load_current_prices():
                         'available': vals[3].strip() if len(vals) > 3 else '',
                     }
     return prices
+
+def _load_sales_data():
+    """Load SalesData from .xls files (HTML tables saved as .xls) keyed by item number."""
+    from html.parser import HTMLParser
+
+    class TableParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.rows = []
+            self.current_row = None
+            self.current_cell = ''
+            self.in_cell = False
+        def handle_starttag(self, tag, attrs):
+            if tag == 'tr':
+                self.current_row = []
+            elif tag in ('td', 'th'):
+                self.in_cell = True
+                self.current_cell = ''
+        def handle_endtag(self, tag):
+            if tag in ('td', 'th') and self.in_cell:
+                self.in_cell = False
+                if self.current_row is not None:
+                    self.current_row.append(self.current_cell.strip())
+            elif tag == 'tr' and self.current_row is not None:
+                self.rows.append(self.current_row)
+                self.current_row = None
+        def handle_data(self, data):
+            if self.in_cell:
+                self.current_cell += data
+
+    sales = {}
+    if not SALES_DATA_DIR.exists():
+        return sales
+    for f in SALES_DATA_DIR.iterdir():
+        if f.suffix.lower() not in ('.xls', '.html', '.htm'):
+            continue
+        try:
+            with open(f, 'r', errors='ignore') as fh:
+                content = fh.read()
+        except Exception:
+            continue
+        parser = TableParser()
+        parser.feed(content)
+        header_idx = None
+        for i, row in enumerate(parser.rows):
+            if any('Item #' in c or 'Item#' in c for c in row):
+                header_idx = i
+                break
+        if header_idx is None:
+            continue
+        for row in parser.rows[header_idx + 1:]:
+            if len(row) < 10:
+                continue
+            item_num = row[1].strip()
+            if not item_num or not any(c.isdigit() for c in item_num):
+                continue
+            units_sold = row[4].strip() if len(row) > 4 else ''
+            qty_oh = row[9].strip() if len(row) > 9 else ''
+            sales[item_num] = {
+                'units_sold': units_sold,
+                'qty_on_hand': qty_oh,
+            }
+    return sales
 
 def _load_future_spa():
     """Load FutureSPA data into a dict keyed by item code."""
@@ -988,9 +1058,11 @@ def search_order_data():
     selected = request.json.get('files', [])
     include_special = request.json.get('include_special', False)
     include_current_prices = request.json.get('include_current_prices', False)
+    include_sales_data = request.json.get('include_sales_data', False)
 
     spa_lookup = _load_future_spa()
     prices_lookup = _load_current_prices() if include_current_prices else {}
+    sales_lookup = _load_sales_data() if include_sales_data else {}
 
     all_rows = []
     for fname in selected:
@@ -1013,6 +1085,9 @@ def search_order_data():
             row['spa_sort_date'] = spa.get('spa_date', '')
             cp = prices_lookup.get(row['item_num'], {})
             row['available'] = cp.get('available', '')
+            sd = sales_lookup.get(row['item_num'], {})
+            row['units_sold'] = sd.get('units_sold', '')
+            row['qty_on_hand'] = sd.get('qty_on_hand', '')
             all_rows.append(row)
 
     if include_special and SPECIAL_ORDER_CSV.exists():
@@ -1022,6 +1097,7 @@ def search_order_data():
                 continue
             spa = spa_lookup.get(item_num, {})
             cp = prices_lookup.get(item_num, {})
+            sd = sales_lookup.get(item_num, {})
             all_rows.append({
                 'item_num': item_num,
                 'name': srow.get('name', '').strip(),
@@ -1033,12 +1109,15 @@ def search_order_data():
                 'spa_discount': spa.get('spa_discount', ''),
                 'spa_sort_date': spa.get('spa_date', ''),
                 'available': cp.get('available', ''),
+                'units_sold': sd.get('units_sold', ''),
+                'qty_on_hand': sd.get('qty_on_hand', ''),
             })
 
     seen_items = set(row['item_num'] for row in all_rows)
     for item_code, spa in spa_lookup.items():
         if item_code not in seen_items:
             cp = prices_lookup.get(item_code, {})
+            sd = sales_lookup.get(item_code, {})
             all_rows.append({
                 'item_num': item_code,
                 'name': spa.get('name', ''),
@@ -1050,6 +1129,8 @@ def search_order_data():
                 'spa_discount': spa.get('spa_discount', ''),
                 'spa_sort_date': spa.get('spa_date', ''),
                 'available': cp.get('available', ''),
+                'units_sold': sd.get('units_sold', ''),
+                'qty_on_hand': sd.get('qty_on_hand', ''),
             })
 
     all_rows.sort(key=lambda x: x.get('sort_date', ''), reverse=True)
