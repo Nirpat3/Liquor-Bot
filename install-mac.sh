@@ -11,11 +11,11 @@
 #   6. Creates a "Liquor Bot.app" on the Desktop
 #
 # Usage (one-liner):
-#   curl -fsSL https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install.sh -o /tmp/install.sh && bash /tmp/install.sh
+#   curl -fsSL https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install-mac.sh -o /tmp/install-mac.sh && bash /tmp/install-mac.sh
 #
 # Or download first:
-#   curl -fsSL https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install.sh -o install.sh
-#   bash install.sh
+#   curl -fsSL https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install-mac.sh -o install-mac.sh
+#   bash install-mac.sh
 #
 
 set -e
@@ -28,7 +28,7 @@ if [[ "$EUID" -eq 0 ]]; then
     echo "Homebrew (and this installer) must run as your normal user."
     echo ""
     echo "Instead, run:"
-    echo "  curl -fsSL https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install.sh -o install.sh && bash install.sh"
+    echo "  curl -fsSL https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install-mac.sh -o install-mac.sh && bash install-mac.sh"
     echo ""
     exit 1
 fi

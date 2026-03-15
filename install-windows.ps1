@@ -9,11 +9,11 @@
 #   5. Creates a Desktop shortcut
 #
 # Usage (one-liner in PowerShell):
-#   irm https://raw.githubusercontent.com/krishp0130/Liquor-Bot/windows/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install-windows.ps1 | iex
 #
 # Or download first:
-#   Invoke-WebRequest -Uri https://raw.githubusercontent.com/krishp0130/Liquor-Bot/windows/install.ps1 -OutFile install.ps1
-#   .\install.ps1
+#   Invoke-WebRequest -Uri https://raw.githubusercontent.com/krishp0130/Liquor-Bot/main/install-windows.ps1 -OutFile install-windows.ps1
+#   .\install-windows.ps1
 #
 
 $ErrorActionPreference = "Stop"
@@ -104,7 +104,7 @@ if (Test-Path "$InstallDir\.git") {
     Write-Ok "Bot directory already exists. Pulling latest changes..."
     Push-Location $InstallDir
     try {
-        git pull origin windows
+        git pull origin main
         Write-Ok "Updated to latest version"
     } catch {
         Write-Warn "Could not pull latest (offline or conflict). Using existing files."
@@ -116,7 +116,7 @@ if (Test-Path "$InstallDir\.git") {
         $backup = "${InstallDir}_backup_$(Get-Date -Format 'yyyyMMddHHmmss')"
         Rename-Item $InstallDir $backup
     }
-    git clone -b windows $RepoUrl $InstallDir
+    git clone $RepoUrl $InstallDir
     Write-Ok "Repository cloned"
 }
 
