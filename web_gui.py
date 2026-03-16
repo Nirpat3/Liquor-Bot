@@ -1011,9 +1011,11 @@ def _load_sales_data():
             item_num = row[1].strip()
             if not item_num or not any(c.isdigit() for c in item_num):
                 continue
+            name = row[3].strip() if len(row) > 3 else ''
             units_sold = row[4].strip() if len(row) > 4 else ''
             qty_oh = row[9].strip() if len(row) > 9 else ''
             sales[item_num] = {
+                'name': name,
                 'units_sold': units_sold,
                 'qty_on_hand': qty_oh,
             }
@@ -1132,6 +1134,34 @@ def search_order_data():
                 'units_sold': sd.get('units_sold', ''),
                 'qty_on_hand': sd.get('qty_on_hand', ''),
             })
+            seen_items.add(item_code)
+
+    all_supplementary = set()
+    if include_current_prices:
+        all_supplementary.update(prices_lookup.keys())
+    if include_sales_data:
+        all_supplementary.update(sales_lookup.keys())
+    for item_code in all_supplementary:
+        if item_code not in seen_items:
+            cp = prices_lookup.get(item_code, {})
+            sd = sales_lookup.get(item_code, {})
+            spa = spa_lookup.get(item_code, {})
+            name = cp.get('name', '') or sd.get('name', '') or spa.get('name', '')
+            all_rows.append({
+                'item_num': item_code,
+                'name': name,
+                'qty_reserved': '',
+                'sort_date': '',
+                'source_file': '',
+                'spa_date': spa.get('spa_date', ''),
+                'spa_price': spa.get('spa_price', ''),
+                'spa_discount': spa.get('spa_discount', ''),
+                'spa_sort_date': spa.get('spa_date', ''),
+                'available': cp.get('available', ''),
+                'units_sold': sd.get('units_sold', ''),
+                'qty_on_hand': sd.get('qty_on_hand', ''),
+            })
+            seen_items.add(item_code)
 
     all_rows.sort(key=lambda x: x.get('sort_date', ''), reverse=True)
     return jsonify({'items': all_rows})
