@@ -171,6 +171,8 @@ HTML_TEMPLATE = '''
                     <thead>
                         <tr>
                             <th style="cursor:pointer;" onclick="sortOrderResults('item_num')">Item # ⇅</th>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('size')">Size ⇅</th>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('units')">Units ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('available')">Available ⇅</th>
                             <th>Qty Reserved</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('units_sold')">Units Sold ⇅</th>
@@ -179,6 +181,7 @@ HTML_TEMPLATE = '''
                             <th style="cursor:pointer;" onclick="sortOrderResults('source_file')">Source ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('spa_date')">Sale Date ⇅</th>
                             <th>SPA Price</th>
+                            <th style="cursor:pointer;" onclick="sortOrderResults('case_cost')">Case Cost ⇅</th>
                             <th>Discount</th>
                             <th>Actions</th>
                         </tr>
@@ -499,6 +502,8 @@ HTML_TEMPLATE = '''
                 return `
                 <tr style="${rowStyle}">
                     <td>${item.item_num}</td>
+                    <td>${item.size || ''}</td>
+                    <td>${item.units || ''}</td>
                     <td>${item.available || ''}</td>
                     <td>${item.qty_reserved}</td>
                     <td>${item.units_sold || ''}</td>
@@ -507,6 +512,7 @@ HTML_TEMPLATE = '''
                     <td>${item.source_file}</td>
                     <td>${item.spa_date || ''}</td>
                     <td>${item.spa_price || ''}</td>
+                    <td>${item.case_cost || ''}</td>
                     <td>${item.spa_discount || ''}</td>
                     <td><button class="success" style="padding:4px 10px; font-size:12px;" onclick="addToBot('${item.item_num}')">+ Bot</button></td>
                 </tr>`;
@@ -952,7 +958,10 @@ def _load_current_prices():
                     item_code = vals[0].strip()
                     prices[item_code] = {
                         'name': vals[1].strip() if len(vals) > 1 else '',
+                        'size': vals[2].strip() if len(vals) > 2 else '',
                         'available': vals[3].strip() if len(vals) > 3 else '',
+                        'units': vals[5].strip() if len(vals) > 5 else '',
+                        'case_cost': vals[6].strip() if len(vals) > 6 else '',
                     }
     return prices
 
@@ -1086,7 +1095,10 @@ def search_order_data():
             row['spa_discount'] = spa.get('spa_discount', '')
             row['spa_sort_date'] = spa.get('spa_date', '')
             cp = prices_lookup.get(row['item_num'], {})
+            row['size'] = cp.get('size', '')
+            row['units'] = cp.get('units', '')
             row['available'] = cp.get('available', '')
+            row['case_cost'] = cp.get('case_cost', '')
             sd = sales_lookup.get(row['item_num'], {})
             row['units_sold'] = sd.get('units_sold', '')
             row['qty_on_hand'] = sd.get('qty_on_hand', '')
@@ -1110,7 +1122,10 @@ def search_order_data():
                 'spa_price': spa.get('spa_price', ''),
                 'spa_discount': spa.get('spa_discount', ''),
                 'spa_sort_date': spa.get('spa_date', ''),
+                'size': cp.get('size', ''),
+                'units': cp.get('units', ''),
                 'available': cp.get('available', ''),
+                'case_cost': cp.get('case_cost', ''),
                 'units_sold': sd.get('units_sold', ''),
                 'qty_on_hand': sd.get('qty_on_hand', ''),
             })
@@ -1130,7 +1145,10 @@ def search_order_data():
                 'spa_price': spa.get('spa_price', ''),
                 'spa_discount': spa.get('spa_discount', ''),
                 'spa_sort_date': spa.get('spa_date', ''),
+                'size': cp.get('size', ''),
+                'units': cp.get('units', ''),
                 'available': cp.get('available', ''),
+                'case_cost': cp.get('case_cost', ''),
                 'units_sold': sd.get('units_sold', ''),
                 'qty_on_hand': sd.get('qty_on_hand', ''),
             })
@@ -1157,7 +1175,10 @@ def search_order_data():
                 'spa_price': spa.get('spa_price', ''),
                 'spa_discount': spa.get('spa_discount', ''),
                 'spa_sort_date': spa.get('spa_date', ''),
+                'size': cp.get('size', ''),
+                'units': cp.get('units', ''),
                 'available': cp.get('available', ''),
+                'case_cost': cp.get('case_cost', ''),
                 'units_sold': sd.get('units_sold', ''),
                 'qty_on_hand': sd.get('qty_on_hand', ''),
             })
