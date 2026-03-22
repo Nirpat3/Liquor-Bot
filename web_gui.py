@@ -170,7 +170,7 @@ HTML_TEMPLATE = '''
             </div>
             <div id="order-data-status" style="margin-bottom:10px; font-weight:bold;"></div>
             <div style="margin-bottom:10px;">
-                <input type="text" id="item-search-filter" placeholder="Item #s (comma-separated) or Name/Category..." oninput="filterOrderResults()" style="width:400px; padding:8px;">
+                <input type="text" id="item-search-filter" placeholder="Item #s (comma-separated) or Name/Category..." oninput="filterOrderResults()" onkeydown="if(event.key==='Enter')searchOrderData()" style="width:400px; padding:8px;">
             </div>
             <div style="overflow-x:auto;">
                 <table id="order-data-table" style="display:none;">
