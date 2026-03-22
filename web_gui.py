@@ -499,6 +499,11 @@ HTML_TEMPLATE = '''
                 let rowStyle = '';
                 if (hasSale) rowStyle = 'background:#d4edda; color:#155724;';
                 else if (isSO) rowStyle = 'background:#f8d7da; color:#721c24;';
+                const sold = parseFloat(item.units_sold) || 0;
+                const onHand = parseFloat(item.qty_on_hand) || 0;
+                const avg3mo = sold * 3 / 4;
+                const lowStock = sold > 0 && onHand > 0 && avg3mo > onHand;
+                const qohStyle = lowStock ? 'background:#ff9800; color:#fff; font-weight:bold; padding:2px 6px; border-radius:3px;' : '';
                 return `
                 <tr style="${rowStyle}">
                     <td>${item.item_num}</td>
@@ -507,7 +512,7 @@ HTML_TEMPLATE = '''
                     <td>${item.available || ''}</td>
                     <td>${item.qty_requested || ''}</td>
                     <td>${item.units_sold || ''}</td>
-                    <td>${item.qty_on_hand || ''}</td>
+                    <td><span style="${qohStyle}">${item.qty_on_hand || ''}</span></td>
                     <td>${item.name}</td>
                     <td>${item.source_file}</td>
                     <td>${item.spa_date || ''}</td>
