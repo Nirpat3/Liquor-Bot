@@ -126,6 +126,7 @@ HTML_TEMPLATE = '''
                         <th>Item Number</th>
                         <th>Name</th>
                         <th>Size</th>
+                        <th>Units</th>
                         <th>Quantity</th>
                         <th>Status</th>
                         <th>Actions</th>
@@ -364,6 +365,7 @@ HTML_TEMPLATE = '''
                             <td>${item.item_number}</td>
                             <td>${item.name || ''}</td>
                             <td>${item.size || ''}</td>
+                            <td>${item.units || ''}</td>
                             <td>${item.quantity}</td>
                             <td>${item.order_filled === 'yes' ? '✅ Completed' : '⏳ Pending'}</td>
                             <td>
@@ -531,7 +533,7 @@ HTML_TEMPLATE = '''
                     <td>${item.spa_price || ''}</td>
                     <td>${item.case_cost || ''}</td>
                     <td>${item.spa_discount || ''}</td>
-                    <td><button class="success" style="padding:4px 10px; font-size:12px;" onclick="addToBot('${item.item_num}', '${(item.name||'').replace(/'/g,"\\'")}', '${(item.size||'').replace(/'/g,"\\'")}')">+ Bot</button></td>
+                    <td><button class="success" style="padding:4px 10px; font-size:12px;" onclick="addToBot('${item.item_num}', '${(item.name||'').replace(/'/g,"\\'")}', '${(item.size||'').replace(/'/g,"\\'")}', '${item.units||''}')">+ Bot</button></td>
                 </tr>`;
             }).join('');
             table.style.display = items.length > 0 ? 'table' : 'none';
@@ -562,7 +564,7 @@ HTML_TEMPLATE = '''
             renderOrderResults();
         }
         
-        function addToBot(itemNum, name, size) {
+        function addToBot(itemNum, name, size, units) {
             const qty = prompt('Enter quantity for item ' + itemNum + ':');
             if (qty === null || qty.trim() === '') return;
             if (isNaN(qty) || parseInt(qty) <= 0) {
@@ -572,7 +574,7 @@ HTML_TEMPLATE = '''
             fetch('/add_item', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({item_number: itemNum, name: name || '', size: size || '', quantity: qty.trim()})
+                body: JSON.stringify({item_number: itemNum, name: name || '', size: size || '', units: units || '', quantity: qty.trim()})
             }).then(r => r.json()).then(() => {
                 alert('Item ' + itemNum + ' (qty: ' + qty.trim() + ') added to bot orders.');
             });
@@ -716,12 +718,13 @@ def add_item():
         'quantity': data['quantity'],
         'name': data.get('name', ''),
         'size': data.get('size', ''),
+        'units': data.get('units', ''),
         'order_filled': ''
     })
     
     # Write back to CSV
     with open('orders.csv', 'w', newline='') as file:
-        fieldnames = ['item_number', 'quantity', 'name', 'size', 'order_filled']
+        fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
         writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(orders)
@@ -746,7 +749,7 @@ def delete_item():
     
     # Write back
     with open('orders.csv', 'w', newline='') as file:
-        fieldnames = ['item_number', 'quantity', 'name', 'size', 'order_filled']
+        fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
         writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(orders)
@@ -762,7 +765,7 @@ def clear_completed():
             orders = [row for row in reader if row.get('order_filled', '').lower() != 'yes']
     
     with open('orders.csv', 'w', newline='') as file:
-        fieldnames = ['item_number', 'quantity', 'name', 'size', 'order_filled']
+        fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
         writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(orders)
@@ -1224,7 +1227,7 @@ def run_bot_thread():
             # Ensure orders.csv exists
             if not Path('orders.csv').exists():
                 with open('orders.csv', 'w', newline='') as f:
-                    f.write('item_number,quantity,name,size,order_filled\n')
+                    f.write('item_number,quantity,name,size,units,order_filled\n')
                 logging.info("Created empty orders.csv")
             
             try:
