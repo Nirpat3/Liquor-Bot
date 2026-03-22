@@ -466,18 +466,25 @@ class WebAutomationBot:
             try:
                 add_item_visible = None
                 search_frames = ([self._content_frame] if self._content_frame else []) + [self.page] + list(self.page.frames)
+                selectors = ['span:has-text("Add Item")', 'button:has-text("Add Item")', 'div:has(span:has-text("Add Item"))']
                 for frame in search_frames:
                     if not frame:
                         continue
-                    for sel in ['span:has-text("Add Item")', 'button:has-text("Add Item")', 'div:has(span:has-text("Add Item"))']:
+                    for sel in selectors:
                         try:
-                            add_item_visible = await frame.wait_for_selector(sel, timeout=2000)
+                            add_item_visible = await frame.query_selector(sel)
                             if add_item_visible:
                                 break
                         except Exception:
                             continue
                     if add_item_visible:
                         break
+                if not add_item_visible:
+                    ctx = self._content_frame if self._content_frame else self.page
+                    try:
+                        add_item_visible = await ctx.wait_for_selector(selectors[0], timeout=1500)
+                    except Exception:
+                        pass
                 if not add_item_visible:
                     raise Exception("Add Item button not found")
                 ctx = self._content_frame if self._content_frame else self.page
