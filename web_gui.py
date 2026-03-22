@@ -174,7 +174,7 @@ HTML_TEMPLATE = '''
                             <th style="cursor:pointer;" onclick="sortOrderResults('size')">Size ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('units')">Units ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('available')">Available ⇅</th>
-                            <th>Qty Reserved</th>
+                            <th>Qty Requested</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('units_sold')">Units Sold ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('qty_on_hand')">Qty On Hand ⇅</th>
                             <th style="cursor:pointer;" onclick="sortOrderResults('name')">Name ⇅</th>
@@ -505,7 +505,7 @@ HTML_TEMPLATE = '''
                     <td>${item.size || ''}</td>
                     <td>${item.units || ''}</td>
                     <td>${item.available || ''}</td>
-                    <td>${item.qty_reserved}</td>
+                    <td>${item.qty_requested || ''}</td>
                     <td>${item.units_sold || ''}</td>
                     <td>${item.qty_on_hand || ''}</td>
                     <td>${item.name}</td>
@@ -1115,7 +1115,7 @@ def search_order_data():
             all_rows.append({
                 'item_num': item_num,
                 'name': srow.get('name', '').strip(),
-                'qty_reserved': '',
+                'qty_requested': '',
                 'sort_date': '',
                 'source_file': 'SO#' + srow.get('order_number', '').strip(),
                 'spa_date': spa.get('spa_date', ''),
@@ -1138,7 +1138,7 @@ def search_order_data():
             all_rows.append({
                 'item_num': item_code,
                 'name': spa.get('name', ''),
-                'qty_reserved': '',
+                'qty_requested': '',
                 'sort_date': '',
                 'source_file': 'SPA Only',
                 'spa_date': spa.get('spa_date', ''),
@@ -1168,7 +1168,7 @@ def search_order_data():
             all_rows.append({
                 'item_num': item_code,
                 'name': name,
-                'qty_reserved': '',
+                'qty_requested': '',
                 'sort_date': '',
                 'source_file': '',
                 'spa_date': spa.get('spa_date', ''),
