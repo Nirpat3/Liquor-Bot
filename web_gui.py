@@ -116,6 +116,7 @@ HTML_TEMPLATE = '''
                 <button class="success" onclick="addItem()">➕ Add Item</button>
                 <button onclick="loadOrders()">🔄 Refresh</button>
                 <button class="danger" onclick="clearCompleted()">🗑️ Clear Completed</button>
+                <button onclick="sortOrders()">🔢 Sort by Item #</button>
                 <button onclick="downloadCSV()">📥 Download CSV</button>
                 <button onclick="document.getElementById('file-upload').click()">📤 Upload CSV</button>
                 <input type="file" id="file-upload" style="display: none;" accept=".csv" onchange="uploadCSV(event)">
@@ -375,6 +376,12 @@ HTML_TEMPLATE = '''
                     `).join('');
                     loadStats();
                 });
+        }
+        
+        function sortOrders() {
+            fetch('/sort_orders', {method: 'POST'})
+                .then(r => r.json())
+                .then(() => loadOrders());
         }
         
         function loadStats() {
@@ -770,6 +777,24 @@ def clear_completed():
         writer.writeheader()
         writer.writerows(orders)
     
+    return jsonify({'success': True})
+
+@app.route('/sort_orders', methods=['POST'])
+def sort_orders():
+    orders = []
+    if Path('orders.csv').exists():
+        with open('orders.csv', 'r', newline='') as file:
+            reader = csv.DictReader(file)
+            orders = list(reader)
+
+    orders.sort(key=lambda x: int(x.get('item_number', 0) or 0))
+
+    with open('orders.csv', 'w', newline='') as file:
+        fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
+        writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(orders)
+
     return jsonify({'success': True})
 
 @app.route('/get_stats')
