@@ -287,6 +287,14 @@ class WebAutomationBot:
     
     async def _get_search_input(self):
         """Get the item search input - try main page and iframes (Glide uses iframes)"""
+        if self._content_frame:
+            for selector in ['input[id="Dm-8"]', 'input[placeholder*="Item"]', 'input[id^="Dm"]', 'input[type="text"]']:
+                try:
+                    el = await self._content_frame.query_selector(selector)
+                    if el and await el.is_visible():
+                        return el
+                except Exception:
+                    continue
         for frame in [self.page] + list(self.page.frames):
             try:
                 for selector in ['input[id="Dm-8"]', 'input[placeholder*="Item"]', 'input[id^="Dm"]', 'input[type="text"]']:
@@ -456,11 +464,14 @@ class WebAutomationBot:
             search_input = await self._get_search_input()
             await search_input.click()
             await search_input.fill('')
-            await search_input.type(str(item_number), delay=30)
+            await search_input.type(str(item_number), delay=15)
             
             await search_input.press('Enter')
-            await self.page.wait_for_load_state('networkidle')
-            await asyncio.sleep(0.5)  # wait for search results to render
+            try:
+                await self.page.wait_for_load_state('networkidle', timeout=3000)
+            except Exception:
+                pass
+            await asyncio.sleep(0.3)
             
             # check if Add Item button appears (indicates item is available)
             try:
@@ -482,7 +493,7 @@ class WebAutomationBot:
                 if not add_item_visible:
                     ctx = self._content_frame if self._content_frame else self.page
                     try:
-                        add_item_visible = await ctx.wait_for_selector(selectors[0], timeout=1500)
+                        add_item_visible = await ctx.wait_for_selector(selectors[0], timeout=500)
                     except Exception:
                         pass
                 if not add_item_visible:
