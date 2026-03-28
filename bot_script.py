@@ -497,6 +497,10 @@ class WebAutomationBot:
                     available_quantity = int(available_text.replace(',', ''))
                     logger.info(f"    Available quantity: {available_quantity}")
                     
+                    if available_quantity == 0:
+                        logger.info(f"  ✗ Item #{item_number} available qty is 0, skipping.")
+                        raise Exception("Available quantity is 0")
+                    
                     if quantity > available_quantity:
                         adjusted_quantity = max(1, int(available_quantity * 0.7))
                         logger.info(f"    Adjusting quantity from {quantity} to {adjusted_quantity} (70% of available)")
@@ -504,7 +508,9 @@ class WebAutomationBot:
                     else:
                         logger.info(f"    Using requested quantity: {quantity}")
                         
-                except Exception:
+                except Exception as avail_err:
+                    if "Available quantity is 0" in str(avail_err):
+                        raise
                     logger.warning(f"    Could not read available quantity, using requested: {quantity}")
                 
                 # click Add Item button
