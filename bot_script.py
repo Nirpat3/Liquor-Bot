@@ -1203,6 +1203,9 @@ def read_csv_file(filename):
                 items.append({
                     'item_number': int(row['item_number']),
                     'quantity': int(row['quantity']),
+                    'name': row.get('name', ''),
+                    'size': row.get('size', ''),
+                    'units': row.get('units', ''),
                     'order_filled': row.get('order_filled', '').strip()
                 })
         return items
@@ -1214,8 +1217,8 @@ def update_csv_file(filename, items):
     """Update CSV file with order_filled status"""
     try:
         with open(filename, 'w', newline='') as file:
-            fieldnames = ['item_number', 'quantity', 'order_filled']
-            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
+            writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(items)
         logger.info("CSV file updated")
@@ -1226,13 +1229,13 @@ def create_sample_csv():
     """Create a sample CSV template"""
     sample_filename = 'orders_template.csv'
     with open(sample_filename, 'w', newline='') as file:
-        fieldnames = ['item_number', 'quantity', 'order_filled']
+        fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows([
-            {'item_number': '12345', 'quantity': '10', 'order_filled': ''},
-            {'item_number': '67890', 'quantity': '5', 'order_filled': ''},
-            {'item_number': '11111', 'quantity': '20', 'order_filled': ''}
+            {'item_number': '12345', 'quantity': '10', 'name': '', 'size': '', 'units': '', 'order_filled': ''},
+            {'item_number': '67890', 'quantity': '5', 'name': '', 'size': '', 'units': '', 'order_filled': ''},
+            {'item_number': '11111', 'quantity': '20', 'name': '', 'size': '', 'units': '', 'order_filled': ''}
         ])
     logger.info(f"Created sample CSV template: {sample_filename}")
 
