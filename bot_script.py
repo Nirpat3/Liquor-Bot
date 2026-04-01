@@ -462,16 +462,27 @@ class WebAutomationBot:
         """
         ctx = self._content_frame if self._content_frame else self.page
 
-        # First check if available quantity is shown (fast check, short timeout)
+        # Fast check: look for qty element immediately (no waiting)
         try:
-            el = await ctx.wait_for_selector(QTY_AVAILABLE_SELECTOR, timeout=1500)
-            available_text = await el.text_content() or '0'
-            available_quantity = int(available_text.replace(',', ''))
+            el = await ctx.query_selector(QTY_AVAILABLE_SELECTOR)
+            if el:
+                available_text = await el.text_content() or '0'
+                available_quantity = int(available_text.replace(',', ''))
+                if available_quantity == 0:
+                    return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
+                return {'available': True, 'quantity': available_quantity, 'reason': ''}
+        except Exception:
+            pass
 
-            if available_quantity == 0:
-                return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
-
-            return {'available': True, 'quantity': available_quantity, 'reason': ''}
+        # Brief wait in case page is still rendering (max 500ms)
+        try:
+            el = await ctx.wait_for_selector(QTY_AVAILABLE_SELECTOR, timeout=500)
+            if el:
+                available_text = await el.text_content() or '0'
+                available_quantity = int(available_text.replace(',', ''))
+                if available_quantity == 0:
+                    return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
+                return {'available': True, 'quantity': available_quantity, 'reason': ''}
         except Exception:
             pass
 
@@ -520,23 +531,19 @@ class WebAutomationBot:
 
             await search_input.press('Enter')
             try:
-                await self.page.wait_for_load_state('networkidle', timeout=2000)
+                await self.page.wait_for_load_state('networkidle', timeout=1000)
             except Exception:
                 pass
-            await asyncio.sleep(0.2)
 
             # Quick availability check BEFORE trying to click Add Item
             availability = await self._check_item_availability(item_number)
 
             if not availability['available']:
                 logger.info(f"  x Item #{item_number} not available ({availability['reason']}), skipping")
-                # Clear search input quickly and move on
+                # Clear search input and move to next item immediately
                 try:
                     search_input = await self._get_search_input()
-                    await search_input.click()
-                    await search_input.press('Control+a')
-                    await search_input.press('Backspace')
-                    await asyncio.sleep(0.1)
+                    await search_input.triple_click()
                 except Exception:
                     pass
                 continue
