@@ -110,11 +110,38 @@ class BotGUI:
         
         # use saved auth checkbox
         self.use_saved_auth_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(settings_frame, text="Use saved authentication (skip login if possible)", 
+        ttk.Checkbutton(settings_frame, text="Use saved authentication (skip login if possible)",
                        variable=self.use_saved_auth_var).grid(row=4, column=0, columnspan=2, pady=5)
-        
+
+        # cooldown settings
+        cooldown_frame = ttk.LabelFrame(parent, text="Cooldown (Anti-Detection)", padding=10)
+        cooldown_frame.pack(fill='x', padx=10, pady=(10, 0))
+
+        ttk.Label(cooldown_frame, text="Work interval (min):").grid(row=0, column=0, sticky='w', pady=5)
+        self.work_interval_entry = ttk.Entry(cooldown_frame, width=10)
+        self.work_interval_entry.grid(row=0, column=1, pady=5, padx=5, sticky='w')
+        self.work_interval_entry.insert(0, "15")
+
+        ttk.Label(cooldown_frame, text="Rest min (min):").grid(row=0, column=2, sticky='w', pady=5, padx=(15, 0))
+        self.rest_min_entry = ttk.Entry(cooldown_frame, width=10)
+        self.rest_min_entry.grid(row=0, column=3, pady=5, padx=5, sticky='w')
+        self.rest_min_entry.insert(0, "2")
+
+        ttk.Label(cooldown_frame, text="Rest max (min):").grid(row=0, column=4, sticky='w', pady=5, padx=(15, 0))
+        self.rest_max_entry = ttk.Entry(cooldown_frame, width=10)
+        self.rest_max_entry.grid(row=0, column=5, pady=5, padx=5, sticky='w')
+        self.rest_max_entry.insert(0, "3")
+
+        self.cooldown_enabled_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(cooldown_frame, text="Enable cooldown breaks",
+                       variable=self.cooldown_enabled_var).grid(row=1, column=0, columnspan=4, pady=5, sticky='w')
+
+        ttk.Label(cooldown_frame, text="Bot pauses for a random duration between Rest min and Rest max\n"
+                  "after every Work interval to avoid detection.",
+                  foreground='gray', font=('Arial', 9)).grid(row=2, column=0, columnspan=6, pady=(0, 5), sticky='w')
+
         # save settings button
-        ttk.Button(settings_frame, text="Save Settings", 
+        ttk.Button(settings_frame, text="Save Settings",
                   command=self.save_settings).grid(row=5, column=0, columnspan=2, pady=20)
         
         # instructions
@@ -139,6 +166,7 @@ class BotGUI:
         ttk.Button(control_frame, text="Add Row", command=self.add_csv_row).pack(side='left', padx=5)
         ttk.Button(control_frame, text="Delete Row", command=self.delete_csv_row).pack(side='left', padx=5)
         ttk.Button(control_frame, text="Clear All 'Yes' Marks", command=self.clear_yes_marks).pack(side='left', padx=5)
+        ttk.Button(control_frame, text="Clear All Orders", command=self.clear_all_orders).pack(side='left', padx=5)
         
         # frame for csv table
         table_frame = ttk.Frame(parent)
@@ -179,13 +207,20 @@ class BotGUI:
         control_frame = ttk.LabelFrame(parent, text="Bot Control", padding=20)
         control_frame.pack(fill='x', padx=10, pady=10)
         
-        # start/stop button
-        self.start_button = ttk.Button(control_frame, text="Start Bot", 
+        # button row
+        btn_row = ttk.Frame(control_frame)
+        btn_row.pack(pady=10)
+
+        self.start_button = ttk.Button(btn_row, text="Start Bot",
                                       command=self.toggle_bot, state='normal')
-        self.start_button.pack(pady=10)
-        
+        self.start_button.pack(side='left', padx=5)
+
+        self.skip_cooldown_button = ttk.Button(btn_row, text="Skip Cooldown",
+                                               command=self.skip_cooldown, state='disabled')
+        self.skip_cooldown_button.pack(side='left', padx=5)
+
         # status label
-        self.status_label = ttk.Label(control_frame, text="Status: Stopped", 
+        self.status_label = ttk.Label(control_frame, text="Status: Stopped",
                                      font=('Arial', 12, 'bold'))
         self.status_label.pack(pady=10)
         
@@ -412,6 +447,16 @@ class BotGUI:
             self.save_csv()
             self.update_stats()
             
+    def clear_all_orders(self):
+        # confirm before clearing everything
+        if not messagebox.askyesno("Confirm", "Delete ALL orders from the list?"):
+            return
+        for item in self.csv_tree.get_children():
+            self.csv_tree.delete(item)
+        self.save_csv()
+        self.update_stats()
+        messagebox.showinfo("Success", "All orders cleared!")
+
     def clear_yes_marks(self):
         # clear all 'yes' marks in order_filled column
         for item in self.csv_tree.get_children():
@@ -499,43 +544,98 @@ class BotGUI:
         self.load_csv()  # reload csv to show updates
         self.update_stats()
         
+    def skip_cooldown(self):
+        """User clicked Skip Cooldown — resume immediately."""
+        self._skip_cooldown = True
+        logging.info("Cooldown skipped by user")
+
+    async def _do_cooldown(self):
+        """Run a cooldown break. Returns early if user clicks Skip Cooldown."""
+        import random
+        try:
+            rest_min = float(self.rest_min_entry.get())
+            rest_max = float(self.rest_max_entry.get())
+        except ValueError:
+            rest_min, rest_max = 2.0, 3.0
+
+        rest_seconds = random.uniform(rest_min * 60, rest_max * 60)
+        rest_end = time.time() + rest_seconds
+        self._skip_cooldown = False
+
+        logging.info(f"Cooldown break: pausing for {rest_seconds/60:.1f} min to avoid detection...")
+        self.root.after(0, lambda: self.status_label.config(
+            text=f"Status: Cooling down ({rest_seconds/60:.1f} min)", foreground='orange'))
+        self.root.after(0, lambda: self.skip_cooldown_button.config(state='normal'))
+
+        while time.time() < rest_end and not self.stop_event.is_set() and not self._skip_cooldown:
+            remaining = int(rest_end - time.time())
+            mins, secs = divmod(remaining, 60)
+            self.root.after(0, lambda m=mins, s=secs: self.status_label.config(
+                text=f"Status: Cooldown {m}:{s:02d} remaining (click Skip to resume)", foreground='orange'))
+            await asyncio.sleep(1)
+
+        if self._skip_cooldown:
+            logging.info("Cooldown skipped — resuming immediately")
+        else:
+            logging.info("Cooldown complete — resuming operations")
+
+        self.root.after(0, lambda: self.status_label.config(
+            text="Status: Running", foreground='green'))
+        self.root.after(0, lambda: self.skip_cooldown_button.config(state='disabled'))
+
     async def run_bot(self):
         # import bot class
         from bot_script import WebAutomationBot, read_csv_file, update_csv_file  # noqa: F401 - used in run_bot
-        
+        import random
+
         headless = self.headless_var.get()
         bot = WebAutomationBot(headless=headless)
         self.bot = bot
 
+        # cooldown tracking
+        try:
+            work_interval = float(self.work_interval_entry.get()) * 60
+        except ValueError:
+            work_interval = 15 * 60
+        cooldown_enabled = self.cooldown_enabled_var.get()
+        last_cooldown = time.time()
+
         try:
             await bot.setup(use_saved_auth=self.use_saved_auth_var.get())
             logging.info("Bot ready. If prompted for OTP, complete it in the browser.")
-            
+
             while not self.stop_event.is_set():
+                # Check if cooldown is due
+                if cooldown_enabled and (time.time() - last_cooldown) >= work_interval:
+                    await self._do_cooldown()
+                    last_cooldown = time.time()
+                    if self.stop_event.is_set():
+                        break
+
                 try:
                     # read items from csv
                     items = read_csv_file('orders.csv')
-                    
+
                     # filter unfilled items
-                    unfilled_items = [item for item in items 
+                    unfilled_items = [item for item in items
                                     if item.get('order_filled', '').lower() != 'yes']
-                    
+
                     if not unfilled_items:
                         logging.info("All items completed! Checking for new items in 5 seconds...")
                         await asyncio.sleep(5)
                         self.root.after(0, self.load_csv)
                         self.root.after(0, self.update_stats)
                         continue
-                    
+
                     logging.info(f"Checking {len(unfilled_items)} items for availability...")
-                    
+
                     # Start a new order if not already on the order page
                     current_url = bot.page.url
                     if 'itemEntry' not in current_url:
                         await bot.start_order()
-                    
+
                     items_found, total_qty_added = await bot.check_and_process_items(items)
-                    
+
                     if items_found and total_qty_added >= 10:
                         item_numbers = [str(item['item_number']) for item in items_found]
                         logging.info(f"Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
