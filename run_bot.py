@@ -39,16 +39,21 @@ def main():
         print(f"Missing packages: {', '.join(missing)}")
         install_requirements()
 
-    try:
-        # Try Tkinter GUI
-        from gui_bot import main as run_gui
-        run_gui()
-    except ImportError:
-        print("Tkinter not available. Starting web interface...")
-        from web_gui import app
-        import webbrowser
-        webbrowser.open('http://127.0.0.1:5050')
-        app.run(debug=False, port=5050, host='0.0.0.0')
+    # Default to the web UI so it works on all platforms
+    # Pass --tkinter to use the desktop GUI instead
+    if '--tkinter' in sys.argv:
+        try:
+            from gui_bot import main as run_gui
+            run_gui()
+            return
+        except ImportError:
+            print("Tkinter not available. Falling back to web interface...")
+
+    from web_gui import app
+    import webbrowser
+    print("Starting web interface at http://127.0.0.1:5050")
+    webbrowser.open('http://127.0.0.1:5050')
+    app.run(debug=False, port=5050, host='0.0.0.0')
 
 if __name__ == "__main__":
     main()
