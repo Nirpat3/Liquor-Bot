@@ -51,8 +51,16 @@ def main():
 
     from web_gui import app
     import webbrowser
+    import threading
+
+    def open_browser():
+        """Wait for the server to start, then open the browser."""
+        import time
+        time.sleep(1.5)
+        webbrowser.open('http://127.0.0.1:5050')
+
     print("Starting web interface at http://127.0.0.1:5050")
-    webbrowser.open('http://127.0.0.1:5050')
+    threading.Thread(target=open_browser, daemon=True).start()
     app.run(debug=False, port=5050, host='0.0.0.0')
 
 if __name__ == "__main__":
