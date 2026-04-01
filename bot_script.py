@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 from playwright.async_api import async_playwright
 import os
@@ -8,6 +9,8 @@ from pathlib import Path
 import csv
 import time
 import fcntl
+import json
+import urllib.request
 
 # set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -74,6 +77,39 @@ def create_sample_csv():
             {'item_number': '11111', 'quantity': '20', 'name': '', 'size': '', 'units': '', 'order_filled': ''}
         ])
     logger.info(f"Created sample CSV template: {sample_filename}")
+
+
+# ── Notifications ──
+
+def send_notification(message: str, level: str = 'info'):
+    """Send notification via configured webhook (Discord, Slack, or generic).
+    Set WEBHOOK_URL in .env to enable. Silently skips if not configured."""
+    webhook_url = os.getenv('WEBHOOK_URL', '').strip()
+    if not webhook_url:
+        return
+
+    try:
+        # Discord webhook
+        if 'discord.com/api/webhooks' in webhook_url:
+            payload = json.dumps({'content': f"**[{level.upper()}]** {message}"}).encode()
+            req = urllib.request.Request(webhook_url, data=payload,
+                                        headers={'Content-Type': 'application/json'})
+        # Slack webhook
+        elif 'hooks.slack.com' in webhook_url:
+            emoji = ':white_check_mark:' if level == 'success' else ':x:' if level == 'error' else ':information_source:'
+            payload = json.dumps({'text': f"{emoji} *{level.upper()}*: {message}"}).encode()
+            req = urllib.request.Request(webhook_url, data=payload,
+                                        headers={'Content-Type': 'application/json'})
+        # Generic webhook (POST JSON)
+        else:
+            payload = json.dumps({'level': level, 'message': message, 'source': 'liquor-bot'}).encode()
+            req = urllib.request.Request(webhook_url, data=payload,
+                                        headers={'Content-Type': 'application/json'})
+
+        urllib.request.urlopen(req, timeout=10)
+        logger.info(f"Notification sent: {message}")
+    except Exception as e:
+        logger.warning(f"Failed to send notification: {e}")
 
 
 # ── Selector constants ──
@@ -1176,9 +1212,16 @@ class WebAutomationBot:
             await self.playwright.stop()
 
 
-async def main():
-    """Main bot loop"""
+async def main(daemon: bool = False):
+    """Main bot loop.
+
+    Args:
+        daemon: If True, runs headless with auto-restart and notifications.
+                The bot will keep running indefinitely, re-initializing on
+                any fatal error. Designed for unattended operation.
+    """
     csv_filename = 'orders.csv'
+    headless = daemon or os.getenv('HEADLESS', 'False').lower() == 'true'
 
     if not Path(csv_filename).exists():
         logger.warning(f"{csv_filename} not found. Creating sample template...")
@@ -1186,96 +1229,146 @@ async def main():
         logger.info(f"Please fill in orders_template.csv and rename it to {csv_filename}")
         return
 
-    bot = WebAutomationBot(headless=False)
+    if daemon:
+        logger.info("Running in DAEMON mode (headless, auto-restart, notifications enabled)")
+        send_notification("Bot starting in daemon mode", "info")
 
-    try:
-        logger.info("Initializing bot...")
-        await bot.setup(use_saved_auth=True)
+    # Outer restart loop — in daemon mode, never exit on error
+    while True:
+        bot = WebAutomationBot(headless=headless)
 
-        logger.info("\n" + "=" * 60)
-        logger.info("BOT STARTED - Continuously checking for items")
-        logger.info("=" * 60 + "\n")
+        try:
+            logger.info("Initializing bot...")
+            await bot.setup(use_saved_auth=True)
 
-        consecutive_errors = 0
-        on_item_entry = False
-        while True:
-            try:
-                items = read_csv_file(csv_filename)
-                unfilled_items = [item for item in items if item.get('order_filled', '').lower() != 'yes']
+            logger.info("=" * 60)
+            logger.info("BOT STARTED - Continuously checking for items")
+            logger.info("=" * 60)
+            if daemon:
+                send_notification("Bot is online and monitoring items", "success")
 
-                if not unfilled_items:
-                    logger.info("All items completed! Checking for new items in 5 seconds...")
-                    await asyncio.sleep(5)
-                    on_item_entry = False
-                    continue
+            consecutive_errors = 0
+            on_item_entry = False
+            while True:
+                try:
+                    items = read_csv_file(csv_filename)
+                    unfilled_items = [item for item in items if item.get('order_filled', '').lower() != 'yes']
 
-                if not on_item_entry or 'itemEntry' not in bot.page.url:
-                    await bot.start_order()
-                    on_item_entry = True
+                    if not unfilled_items:
+                        logger.info("All items completed! Checking for new items in 5 seconds...")
+                        await asyncio.sleep(5)
+                        on_item_entry = False
+                        continue
 
-                logger.info(f"\n--- Checking {len(unfilled_items)} items for availability ---")
-
-                items_found, total_qty_added = await bot.check_and_process_items(items)
-                consecutive_errors = 0
-
-                if items_found and total_qty_added >= 10:
-                    item_numbers = [str(item['item_number']) for item in items_found]
-                    logger.info(f"\n+ Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
-                    await bot.submit_order()
-                    update_csv_file(csv_filename, items)
-                    on_item_entry = False
-
-                    remaining = [i for i in items if i.get('order_filled', '').lower() != 'yes']
-                    if not remaining:
-                        logger.info("All items filled!")
-                elif items_found and total_qty_added < 10:
-                    logger.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting - will retry.")
-                    for item in items_found:
-                        item['order_filled'] = ''
-                else:
-                    logger.info("No items available. Re-checking all items...")
-                    await asyncio.sleep(1)
-
-            except Exception as e:
-                consecutive_errors += 1
-                logger.error(f"Error (attempt {consecutive_errors}): {e}")
-
-                if consecutive_errors < 3:
-                    try:
-                        logger.info("Attempting to recover...")
+                    if not on_item_entry or 'itemEntry' not in bot.page.url:
                         await bot.start_order()
                         on_item_entry = True
-                        logger.info("Recovered, resuming item checks...")
-                        continue
+
+                    logger.info(f"--- Checking {len(unfilled_items)} items for availability ---")
+
+                    items_found, total_qty_added = await bot.check_and_process_items(items)
+                    consecutive_errors = 0
+
+                    if items_found and total_qty_added >= 10:
+                        item_numbers = [str(item['item_number']) for item in items_found]
+                        logger.info(f"+ Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
+                        await bot.submit_order()
+                        update_csv_file(csv_filename, items)
+                        on_item_entry = False
+
+                        # Notify on successful order
+                        msg = f"Order placed! {len(items_found)} items ({total_qty_added} units): {', '.join(item_numbers)}"
+                        send_notification(msg, "success")
+
+                        remaining = [i for i in items if i.get('order_filled', '').lower() != 'yes']
+                        if not remaining:
+                            logger.info("All items filled!")
+                            send_notification("All items have been ordered!", "success")
+                    elif items_found and total_qty_added < 10:
+                        logger.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting - will retry.")
+                        for item in items_found:
+                            item['order_filled'] = ''
+                    else:
+                        logger.info("No items available. Re-checking all items...")
+                        await asyncio.sleep(1)
+
+                except Exception as e:
+                    consecutive_errors += 1
+                    logger.error(f"Error (attempt {consecutive_errors}): {e}")
+
+                    if consecutive_errors < 3:
+                        try:
+                            logger.info("Attempting to recover...")
+                            await bot.start_order()
+                            on_item_entry = True
+                            logger.info("Recovered, resuming item checks...")
+                            continue
+                        except Exception:
+                            pass
+
+                    logger.info("Re-initializing bot (full login)...")
+                    send_notification(f"Bot re-initializing after {consecutive_errors} errors", "error")
+                    consecutive_errors = 0
+                    on_item_entry = False
+                    try:
+                        await bot.cleanup()
                     except Exception:
                         pass
+                    bot = WebAutomationBot(headless=headless)
+                    await bot.setup(use_saved_auth=True)
 
-                logger.info("Re-initializing bot (full login)...")
-                consecutive_errors = 0
-                on_item_entry = False
-                try:
-                    await bot.cleanup()
-                except Exception:
-                    pass
-                bot = WebAutomationBot(headless=False)
-                await bot.setup(use_saved_auth=True)
+        except KeyboardInterrupt:
+            logger.info("\nBot stopped by user")
+            send_notification("Bot stopped by user", "info")
+            break
+        except Exception as e:
+            logger.error(f"FATAL BOT ERROR: {e}")
+            send_notification(f"Bot crashed: {e}", "error")
+            if not daemon:
+                import traceback
+                traceback.print_exc()
+                break
+            # Daemon mode: wait and restart
+            logger.info("Daemon mode: restarting in 30 seconds...")
+            try:
+                await bot.cleanup()
+            except Exception:
+                pass
+            await asyncio.sleep(30)
+            continue
+        finally:
+            logger.info("Cleaning up...")
+            try:
+                await bot.cleanup()
+            except Exception:
+                pass
+            logger.info("Bot shutdown complete")
 
-    except KeyboardInterrupt:
-        logger.info("\nBot stopped by user")
-    except Exception as e:
-        logger.error(f"\nFATAL BOT ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        logger.info("Cleaning up...")
-        await bot.cleanup()
-        logger.info("Bot shutdown complete")
+        # If not daemon, exit after one run
+        if not daemon:
+            break
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Mississippi DOR Order Bot")
+    parser.add_argument('--daemon', action='store_true',
+                        help='Run as a daemon (headless, auto-restart, notifications)')
+    parser.add_argument('--headless', action='store_true',
+                        help='Run in headless mode (no browser window)')
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
+    args = parse_args()
+
+    if args.headless:
+        os.environ['HEADLESS'] = 'true'
+
     print("\n" + "=" * 60)
     print("Mississippi DOR Order Bot")
+    if args.daemon:
+        print("Mode: DAEMON (headless, auto-restart)")
     print("=" * 60)
     print("\nPress Ctrl+C to stop the bot\n")
 
-    asyncio.run(main())
+    asyncio.run(main(daemon=args.daemon))
