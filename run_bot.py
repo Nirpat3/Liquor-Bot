@@ -39,16 +39,17 @@ def main():
         print(f"Missing packages: {', '.join(missing)}")
         install_requirements()
 
-    # Default to the web UI so it works on all platforms
-    # Pass --tkinter to use the desktop GUI instead
-    if '--tkinter' in sys.argv:
+    # Try Tkinter desktop app first (works best on Windows)
+    # Pass --web to force the web UI instead
+    if '--web' not in sys.argv:
         try:
             from gui_bot import main as run_gui
             run_gui()
             return
         except ImportError:
-            print("Tkinter not available. Falling back to web interface...")
+            print("Tkinter not available. Starting web interface...")
 
+    # Fall back to web UI
     from web_gui import app
     import webbrowser
     import threading
