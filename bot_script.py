@@ -514,6 +514,7 @@ class WebAutomationBot:
         Skips items with order_filled='yes'. Short-circuits on zero-qty items."""
         items_found = []
         total_qty_added = 0
+        self.trace_log = getattr(self, 'trace_log', [])
 
         for item in items:
             item_number = item['item_number']
@@ -522,23 +523,33 @@ class WebAutomationBot:
             if item.get('order_filled', '').lower() == 'yes':
                 continue
 
+            t_item_start = time.time()
+            trace = {'item': item_number, 'steps': {}, 'result': '', 'total_ms': 0}
+
             # Enter item number
             logger.info(f"Checking item #{item_number}...")
+            t0 = time.time()
             search_input = await self._get_search_input()
             await search_input.click()
             await search_input.fill('')
             await search_input.type(str(item_number), delay=15)
+            trace['steps']['type_item'] = round((time.time() - t0) * 1000)
 
+            t0 = time.time()
             await search_input.press('Enter')
             try:
                 await self.page.wait_for_load_state('networkidle', timeout=1000)
             except Exception:
                 pass
+            trace['steps']['search_wait'] = round((time.time() - t0) * 1000)
 
             # Quick availability check BEFORE trying to click Add Item
+            t0 = time.time()
             availability = await self._check_item_availability(item_number)
+            trace['steps']['qty_check'] = round((time.time() - t0) * 1000)
 
             if not availability['available']:
+                t0 = time.time()
                 logger.info(f"  x Item #{item_number} not available ({availability['reason']}), skipping")
                 # Clear search input and move to next item immediately
                 try:
@@ -546,6 +557,11 @@ class WebAutomationBot:
                     await search_input.triple_click()
                 except Exception:
                     pass
+                trace['steps']['clear_input'] = round((time.time() - t0) * 1000)
+                trace['result'] = f"SKIP ({availability['reason']})"
+                trace['total_ms'] = round((time.time() - t_item_start) * 1000)
+                self.trace_log.append(trace)
+                logger.info(f"  [TRACE] Item #{item_number}: {trace['total_ms']}ms — {' | '.join(f'{k}:{v}ms' for k,v in trace['steps'].items())}")
                 continue
 
             # Item is available - process it
@@ -563,6 +579,7 @@ class WebAutomationBot:
 
             # Click Add Item button
             try:
+                t0 = time.time()
                 add_clicked = await self._click_add_item()
                 if not add_clicked:
                     ctx = self._content_frame if self._content_frame else self.page
@@ -571,18 +588,23 @@ class WebAutomationBot:
 
                 await self.page.wait_for_load_state('networkidle')
                 await asyncio.sleep(0.4)
+                trace['steps']['click_add'] = round((time.time() - t0) * 1000)
 
                 # Enter quantity in modal
+                t0 = time.time()
                 await self._enter_quantity_in_modal(quantity, item_number)
+                trace['steps']['enter_qty'] = round((time.time() - t0) * 1000)
 
                 # Mark item as processed
                 item['order_filled'] = 'yes'
                 items_found.append(item)
                 total_qty_added += quantity
+                trace['result'] = f"ADDED {quantity} units"
                 logger.info(f"    + Added to cart: {quantity} units (total: {total_qty_added})")
 
             except Exception as e:
                 logger.error(f"  x Item #{item_number} failed: {e}")
+                trace['result'] = f"FAILED: {e}"
                 try:
                     search_input = await self._get_search_input()
                     await search_input.click()
@@ -591,6 +613,10 @@ class WebAutomationBot:
                     await asyncio.sleep(0.1)
                 except Exception:
                     pass
+
+            trace['total_ms'] = round((time.time() - t_item_start) * 1000)
+            self.trace_log.append(trace)
+            logger.info(f"  [TRACE] Item #{item_number}: {trace['total_ms']}ms — {' | '.join(f'{k}:{v}ms' for k,v in trace['steps'].items())}")
 
         return items_found, total_qty_added
 

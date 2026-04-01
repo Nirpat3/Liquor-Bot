@@ -72,6 +72,11 @@ class BotGUI:
         notebook.add(control_frame, text='Bot Control')
         self.create_control_tab(control_frame)
         
+        # time trace tab
+        trace_frame = ttk.Frame(notebook)
+        notebook.add(trace_frame, text='Time Trace')
+        self.create_trace_tab(trace_frame)
+
         # log tab
         log_frame = ttk.Frame(notebook)
         notebook.add(log_frame, text='Logs')
@@ -195,6 +200,117 @@ class BotGUI:
         self.progress = ttk.Progressbar(parent, mode='indeterminate')
         self.progress.pack(fill='x', padx=10, pady=10)
         
+    def create_trace_tab(self, parent):
+        # summary frame at top
+        summary_frame = ttk.LabelFrame(parent, text="Summary", padding=10)
+        summary_frame.pack(fill='x', padx=10, pady=(10, 5))
+
+        self.trace_summary_label = ttk.Label(summary_frame,
+            text="Items checked: 0  |  Avg time: —  |  Fastest: —  |  Slowest: —",
+            font=('Consolas', 10))
+        self.trace_summary_label.pack(anchor='w')
+
+        # treeview for per-item trace
+        tree_frame = ttk.Frame(parent)
+        tree_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        columns = ('item', 'result', 'total_ms', 'type_item', 'search_wait', 'qty_check', 'click_add', 'enter_qty', 'clear_input')
+        self.trace_tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=15)
+
+        col_widths = {
+            'item': 70, 'result': 160, 'total_ms': 80,
+            'type_item': 80, 'search_wait': 90, 'qty_check': 80,
+            'click_add': 80, 'enter_qty': 80, 'clear_input': 80
+        }
+        col_labels = {
+            'item': 'Item #', 'result': 'Result', 'total_ms': 'Total (ms)',
+            'type_item': 'Type (ms)', 'search_wait': 'Search (ms)', 'qty_check': 'Qty Chk (ms)',
+            'click_add': 'Add (ms)', 'enter_qty': 'Enter Qty (ms)', 'clear_input': 'Clear (ms)'
+        }
+        for col in columns:
+            self.trace_tree.heading(col, text=col_labels[col])
+            self.trace_tree.column(col, width=col_widths[col], anchor='center')
+
+        scrollbar = ttk.Scrollbar(tree_frame, orient='vertical', command=self.trace_tree.yview)
+        scrollbar.pack(side='right', fill='y')
+        self.trace_tree.configure(yscrollcommand=scrollbar.set)
+        self.trace_tree.pack(side='left', fill='both', expand=True)
+
+        # tag for color-coding rows
+        self.trace_tree.tag_configure('skip', foreground='gray')
+        self.trace_tree.tag_configure('added', foreground='green')
+        self.trace_tree.tag_configure('failed', foreground='red')
+
+        # buttons
+        btn_frame = ttk.Frame(parent)
+        btn_frame.pack(fill='x', padx=10, pady=5)
+        ttk.Button(btn_frame, text="Clear Traces", command=self.clear_traces).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Export CSV", command=self.export_traces).pack(side='left', padx=5)
+
+        # track how many traces we've displayed
+        self._trace_count = 0
+
+    def _poll_traces(self):
+        """Poll bot's trace_log and update the Time Trace tab."""
+        if self.bot and hasattr(self.bot, 'trace_log'):
+            traces = self.bot.trace_log
+            while self._trace_count < len(traces):
+                t = traces[self._trace_count]
+                steps = t.get('steps', {})
+                tag = 'skip' if 'SKIP' in t.get('result', '') else 'added' if 'ADDED' in t.get('result', '') else 'failed'
+                self.trace_tree.insert('', 'end', values=(
+                    t['item'],
+                    t['result'],
+                    t['total_ms'],
+                    steps.get('type_item', '—'),
+                    steps.get('search_wait', '—'),
+                    steps.get('qty_check', '—'),
+                    steps.get('click_add', '—'),
+                    steps.get('enter_qty', '—'),
+                    steps.get('clear_input', '—'),
+                ), tags=(tag,))
+                self.trace_tree.see(self.trace_tree.get_children()[-1])
+                self._trace_count += 1
+
+            # update summary
+            if traces:
+                times = [t['total_ms'] for t in traces]
+                avg = sum(times) // len(times)
+                fastest = min(times)
+                slowest = max(times)
+                skipped = sum(1 for t in traces if 'SKIP' in t.get('result', ''))
+                added = sum(1 for t in traces if 'ADDED' in t.get('result', ''))
+                self.trace_summary_label.config(
+                    text=f"Items checked: {len(traces)}  |  Added: {added}  |  Skipped: {skipped}  |  "
+                         f"Avg: {avg}ms  |  Fastest: {fastest}ms  |  Slowest: {slowest}ms")
+
+        if self.bot_running:
+            self.root.after(500, self._poll_traces)
+
+    def clear_traces(self):
+        for item in self.trace_tree.get_children():
+            self.trace_tree.delete(item)
+        self._trace_count = 0
+        if self.bot and hasattr(self.bot, 'trace_log'):
+            self.bot.trace_log.clear()
+        self.trace_summary_label.config(
+            text="Items checked: 0  |  Avg time: —  |  Fastest: —  |  Slowest: —")
+
+    def export_traces(self):
+        if not self.bot or not hasattr(self.bot, 'trace_log') or not self.bot.trace_log:
+            messagebox.showinfo("Export", "No trace data to export.")
+            return
+        filename = f"trace_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        with open(filename, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['item', 'result', 'total_ms', 'type_item', 'search_wait', 'qty_check', 'click_add', 'enter_qty', 'clear_input'])
+            for t in self.bot.trace_log:
+                s = t.get('steps', {})
+                writer.writerow([t['item'], t['result'], t['total_ms'],
+                    s.get('type_item', ''), s.get('search_wait', ''), s.get('qty_check', ''),
+                    s.get('click_add', ''), s.get('enter_qty', ''), s.get('clear_input', '')])
+        messagebox.showinfo("Export", f"Traces exported to {filename}")
+
     def create_log_tab(self, parent):
         # log text area
         self.log_text = scrolledtext.ScrolledText(parent, state='disabled', 
@@ -339,6 +455,10 @@ class BotGUI:
         # clear stop event
         self.stop_event.clear()
         
+        # start trace polling
+        self._trace_count = 0
+        self._poll_traces()
+
         # start bot in separate thread
         self.bot_thread = threading.Thread(target=self.run_bot_thread, daemon=True)
         self.bot_thread.start()
@@ -385,7 +505,8 @@ class BotGUI:
         
         headless = self.headless_var.get()
         bot = WebAutomationBot(headless=headless)
-        
+        self.bot = bot
+
         try:
             await bot.setup(use_saved_auth=self.use_saved_auth_var.get())
             logging.info("Bot ready. If prompted for OTP, complete it in the browser.")
@@ -443,6 +564,7 @@ class BotGUI:
                     except Exception:
                         pass
                     bot = WebAutomationBot(headless=headless)
+                    self.bot = bot
                     try:
                         await bot.setup(use_saved_auth=True)
                         logging.info("Bot recovered successfully")
