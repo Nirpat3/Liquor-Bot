@@ -3,6 +3,7 @@ from flask import Flask, render_template_string, request, jsonify, send_file
 import threading
 import asyncio
 import csv
+import fcntl
 import json
 from pathlib import Path
 import logging
@@ -19,6 +20,33 @@ app = Flask(__name__)
 bot_thread = None
 bot_running = False
 stop_event = threading.Event()
+
+CSV_FIELDNAMES = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
+
+
+def _read_csv_locked():
+    """Read orders.csv with shared file lock."""
+    orders = []
+    if Path('orders.csv').exists():
+        with open('orders.csv', 'r', newline='') as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                orders = list(csv.DictReader(f))
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    return orders
+
+
+def _write_csv_locked(orders):
+    """Write orders.csv with exclusive file lock."""
+    with open('orders.csv', 'w', newline='') as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES, extrasaction='ignore')
+            writer.writeheader()
+            writer.writerows(orders)
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -701,25 +729,12 @@ def get_settings():
 
 @app.route('/get_orders')
 def get_orders():
-    orders = []
-    if Path('orders.csv').exists():
-        with open('orders.csv', 'r', newline='') as file:
-            reader = csv.DictReader(file)
-            orders = list(reader)
-    return jsonify(orders)
+    return jsonify(_read_csv_locked())
 
 @app.route('/add_item', methods=['POST'])
 def add_item():
     data = request.json
-    
-    # Read existing orders
-    orders = []
-    if Path('orders.csv').exists():
-        with open('orders.csv', 'r', newline='') as file:
-            reader = csv.DictReader(file)
-            orders = list(reader)
-    
-    # Add new item
+    orders = _read_csv_locked()
     orders.append({
         'item_number': data['item_number'],
         'quantity': data['quantity'],
@@ -728,91 +743,42 @@ def add_item():
         'units': data.get('units', ''),
         'order_filled': ''
     })
-    
-    # Write back to CSV
-    with open('orders.csv', 'w', newline='') as file:
-        fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
-        writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
-        writer.writeheader()
-        writer.writerows(orders)
-    
+    _write_csv_locked(orders)
     return jsonify({'success': True})
 
 @app.route('/delete_item', methods=['POST'])
 def delete_item():
     data = request.json
     index = data['index']
-    
-    # Read orders
-    orders = []
-    if Path('orders.csv').exists():
-        with open('orders.csv', 'r', newline='') as file:
-            reader = csv.DictReader(file)
-            orders = list(reader)
-    
-    # Delete item
+    orders = _read_csv_locked()
     if 0 <= index < len(orders):
         orders.pop(index)
-    
-    # Write back
-    with open('orders.csv', 'w', newline='') as file:
-        fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
-        writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
-        writer.writeheader()
-        writer.writerows(orders)
-    
+    _write_csv_locked(orders)
     return jsonify({'success': True})
 
 @app.route('/clear_completed', methods=['POST'])
 def clear_completed():
-    orders = []
-    if Path('orders.csv').exists():
-        with open('orders.csv', 'r', newline='') as file:
-            reader = csv.DictReader(file)
-            orders = [row for row in reader if row.get('order_filled', '').lower() != 'yes']
-    
-    with open('orders.csv', 'w', newline='') as file:
-        fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
-        writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
-        writer.writeheader()
-        writer.writerows(orders)
-    
+    orders = _read_csv_locked()
+    orders = [row for row in orders if row.get('order_filled', '').lower() != 'yes']
+    _write_csv_locked(orders)
     return jsonify({'success': True})
 
 @app.route('/sort_orders', methods=['POST'])
 def sort_orders():
-    orders = []
-    if Path('orders.csv').exists():
-        with open('orders.csv', 'r', newline='') as file:
-            reader = csv.DictReader(file)
-            orders = list(reader)
-
+    orders = _read_csv_locked()
     orders.sort(key=lambda x: int(x.get('item_number', 0) or 0))
-
-    with open('orders.csv', 'w', newline='') as file:
-        fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
-        writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
-        writer.writeheader()
-        writer.writerows(orders)
-
+    _write_csv_locked(orders)
     return jsonify({'success': True})
 
 @app.route('/get_stats')
 def get_stats():
-    orders = []
-    if Path('orders.csv').exists():
-        with open('orders.csv', 'r', newline='') as file:
-            reader = csv.DictReader(file)
-            orders = list(reader)
-    
+    orders = _read_csv_locked()
     total = len(orders)
     completed = sum(1 for o in orders if o.get('order_filled', '').lower() == 'yes')
-    remaining = total - completed
-    
     return jsonify({
         'total': total,
         'completed': completed,
-        'remaining': remaining
+        'remaining': total - completed
     })
 
 @app.route('/toggle_bot', methods=['POST'])
@@ -1235,85 +1201,78 @@ def search_order_data():
     return jsonify({'items': all_rows})
 
 def run_bot_thread():
-    """Run the bot in a separate thread with error recovery matching bot_script.py main loop"""
+    """Run the bot in a separate thread, reusing bot_script.py logic."""
     global bot_running
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
     try:
         from bot_script import WebAutomationBot, read_csv_file, update_csv_file
-        
+
         async def run_bot():
             global bot_running
             load_dotenv()
             headless = os.getenv('HEADLESS', 'False').lower() == 'true'
             bot = WebAutomationBot(headless=headless)
-            
-            # Ensure orders.csv exists
+
             if not Path('orders.csv').exists():
-                with open('orders.csv', 'w', newline='') as f:
-                    f.write('item_number,quantity,name,size,units,order_filled\n')
+                _write_csv_locked([])
                 logging.info("Created empty orders.csv")
-            
+
             try:
                 await bot.setup(use_saved_auth=True)
                 logging.info("Bot ready. If prompted for OTP, complete it in the browser.")
-                
+
                 consecutive_errors = 0
                 on_item_entry = False
                 while not stop_event.is_set():
                     try:
                         items = read_csv_file('orders.csv')
-                        unfilled_items = [item for item in items 
-                                        if item.get('order_filled', '').lower() != 'yes']
-                        
-                        if not unfilled_items:
+                        unfilled = [i for i in items if i.get('order_filled', '').lower() != 'yes']
+
+                        if not unfilled:
                             logging.info("All items completed! Checking for new items in 5 seconds...")
                             await asyncio.sleep(5)
                             on_item_entry = False
                             continue
-                        
+
                         if not on_item_entry or 'itemEntry' not in bot.page.url:
                             await bot.start_order()
                             on_item_entry = True
-                        
-                        logging.info(f"Checking {len(unfilled_items)} items for availability...")
-                        
+
+                        logging.info(f"Checking {len(unfilled)} items for availability...")
                         items_found, total_qty_added = await bot.check_and_process_items(items)
                         consecutive_errors = 0
-                        
+
                         if items_found and total_qty_added >= 10:
-                            item_numbers = [str(item['item_number']) for item in items_found]
+                            item_numbers = [str(i['item_number']) for i in items_found]
                             logging.info(f"Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
                             await bot.submit_order()
                             update_csv_file('orders.csv', items)
                             on_item_entry = False
-                            
-                            remaining = [i for i in items if i.get('order_filled', '').lower() != 'yes']
-                            if not remaining:
+                            if not [i for i in items if i.get('order_filled', '').lower() != 'yes']:
                                 logging.info("All items filled!")
                         elif items_found and total_qty_added < 10:
-                            logging.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting - will retry.")
+                            logging.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting.")
                             for item in items_found:
                                 item['order_filled'] = ''
                         else:
-                            logging.info("No items available. Re-checking all items...")
+                            logging.info("No items available. Re-checking...")
                             await asyncio.sleep(1)
-                    
+
                     except Exception as e:
                         consecutive_errors += 1
-                        logging.error(f"Error (attempt {consecutive_errors}): {e}", exc_info=True)
-                        
+                        logging.error(f"Error (attempt {consecutive_errors}): {e}")
+
                         if consecutive_errors < 3:
                             try:
-                                logging.info("Attempting to recover — navigating to item entry...")
                                 await bot.start_order()
                                 on_item_entry = True
-                                logging.info("Recovered, resuming item checks...")
+                                logging.info("Recovered, resuming...")
                                 continue
                             except Exception:
                                 pass
-                        
+
                         logging.info("Re-initializing bot (full login)...")
                         consecutive_errors = 0
                         on_item_entry = False
@@ -1328,15 +1287,15 @@ def run_bot_thread():
                         except Exception as setup_err:
                             logging.error(f"Recovery failed: {setup_err}")
                             await asyncio.sleep(5)
-                    
+
             except Exception as e:
-                logging.error(f"Bot startup error: {e}", exc_info=True)
+                logging.error(f"Bot startup error: {e}")
             finally:
                 try:
                     await bot.cleanup()
                 except Exception:
                     pass
-        
+
         loop.run_until_complete(run_bot())
     except Exception as e:
         logging.error(f"Thread error: {e}")

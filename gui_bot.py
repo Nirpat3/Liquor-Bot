@@ -13,7 +13,7 @@ import time
 import sys
 from datetime import datetime
 # import bot class
-from bot_script import WebAutomationBot, read_csv_file, update_csv_file
+from bot_script import WebAutomationBot, read_csv_file, update_csv_file  # noqa: F401 - used in run_bot
 
 # set up logging to capture to both file and GUI
 class GuiLogHandler(logging.Handler):
@@ -381,7 +381,7 @@ class BotGUI:
         
     async def run_bot(self):
         # import bot class
-        from bot_script import WebAutomationBot, read_csv_file, update_csv_file
+        from bot_script import WebAutomationBot, read_csv_file, update_csv_file  # noqa: F401 - used in run_bot
         
         headless = self.headless_var.get()
         bot = WebAutomationBot(headless=headless)

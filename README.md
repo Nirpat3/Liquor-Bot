@@ -40,7 +40,7 @@ Or use the Settings tab in the web interface after starting the app.
 python run_bot.py
 ```
 
-Opens the web interface at http://localhost:5000 (or Tkinter GUI if available).
+Opens the web interface at http://localhost:5050 (or Tkinter GUI if available).
 
 ### 4. Use
 
