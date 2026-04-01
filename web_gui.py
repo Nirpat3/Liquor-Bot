@@ -9,9 +9,10 @@ from pathlib import Path
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import sys
+import requests as http_requests
 from odf.opendocument import load as load_ods
 from odf.table import Table, TableRow, TableCell
 from odf.text import P
@@ -555,6 +556,7 @@ HTML_TEMPLATE = '''
             <div class="tab" onclick="showTab('logs', this)">Logs</div>
             <div class="tab" onclick="showTab('orderdata', this)">Order Data</div>
             <div class="tab" onclick="showTab('specialorders', this)">Special Orders</div>
+            <div class="tab" onclick="showTab('salesintel', this)">Sales Intelligence</div>
         </div>
 
         <!-- Control Tab -->
@@ -788,6 +790,81 @@ HTML_TEMPLATE = '''
                 </table>
             </div>
         </div>
+
+        <!-- Sales Intelligence Tab -->
+        <div id="salesintel" class="tab-content">
+            <div class="card">
+                <div class="card-title">Sales Intelligence</div>
+                <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
+                    Analyze sales history from RapidRMS or CortexDB. Generate orders based on velocity and upcoming promotions.
+                </p>
+                <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:16px;">
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Time Frame</label>
+                        <select id="si-timeframe" style="background:var(--bg-input); border:1px solid var(--border); color:var(--text-primary); padding:10px 14px; border-radius:var(--radius-sm); font-size:14px;">
+                            <option value="1w">Last 1 Week</option>
+                            <option value="2w">Last 2 Weeks</option>
+                            <option value="wtd">Week to Date</option>
+                            <option value="mtd" selected>Month to Date</option>
+                            <option value="lm">Last Month</option>
+                            <option value="qtd">Quarter to Date</option>
+                            <option value="lq">Last Quarter</option>
+                            <option value="ytd">Year to Date</option>
+                            <option value="ly">Last Year</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Data Source</label>
+                        <select id="si-datasource" style="background:var(--bg-input); border:1px solid var(--border); color:var(--text-primary); padding:10px 14px; border-radius:var(--radius-sm); font-size:14px;">
+                            <option value="direct">RapidRMS API (Direct)</option>
+                            <option value="cortex">CortexDB (Cached)</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" onclick="loadSalesData()">Fetch Sales</button>
+                    <button class="btn btn-success" onclick="generateOrder()">Generate Order</button>
+                    <button class="btn btn-ghost" onclick="aiRecommend()" style="border-color:var(--accent); color:var(--accent);">AI Recommend</button>
+                </div>
+                <div id="si-status" style="margin-bottom:10px; font-weight:600; color:var(--text-secondary);"></div>
+                <div id="si-ai-panel" style="display:none; margin-bottom:16px;" class="card" >
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <div class="card-title" style="margin-bottom:0; color:var(--accent);">AI Recommendation</div>
+                        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('si-ai-panel').style.display='none'">&times; Close</button>
+                    </div>
+                    <div id="si-ai-content" style="font-size:14px; line-height:1.7; color:var(--text-secondary); white-space:pre-wrap;"></div>
+                    <div id="si-ai-items" style="margin-top:12px;"></div>
+                </div>
+            </div>
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <div class="card-title" style="margin-bottom:0">Sales Data</div>
+                    <div class="btn-group" style="margin-bottom:0">
+                        <button class="btn btn-ghost btn-sm" onclick="loadSalesData()">Refresh</button>
+                        <button class="btn btn-success btn-sm" onclick="pushSelectedToQueue()">Push Selected to Queue</button>
+                    </div>
+                </div>
+                <input type="text" id="si-filter" placeholder="Filter by item # or name..." oninput="filterSalesResults()" style="width:100%; max-width:400px; margin-bottom:12px;">
+                <div style="overflow-x:auto;">
+                    <table id="si-table" style="display:none;">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" id="si-select-all" onchange="toggleAllSales(this)"></th>
+                                <th onclick="sortSales('item_number')">Item #</th>
+                                <th onclick="sortSales('name')">Name</th>
+                                <th onclick="sortSales('units_sold')">Units Sold</th>
+                                <th onclick="sortSales('revenue')">Revenue</th>
+                                <th onclick="sortSales('avg_qty')">Avg Qty/Txn</th>
+                                <th onclick="sortSales('velocity')">Velocity/Day</th>
+                                <th>Trend</th>
+                                <th>SPA</th>
+                                <th>Suggested Qty</th>
+                                <th style="width:70px">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -818,6 +895,7 @@ HTML_TEMPLATE = '''
             if (tabName === 'orders') { loadOrders(); ordersInterval = setInterval(loadOrders, 5000); }
             if (tabName === 'orderdata') loadOrderFiles();
             if (tabName === 'specialorders') loadSpecialOrders();
+            if (tabName === 'salesintel') { /* load on demand via Fetch Sales button */ }
         }
 
         // ── SSE log streaming ──
@@ -1151,6 +1229,139 @@ HTML_TEMPLATE = '''
             }).then(() => { loadSpecialOrders(); toast('Special order removed', 'info'); });
         }
 
+        // ── Sales Intelligence ──
+        let salesData = [];
+        let salesSortKey = 'units_sold';
+        let salesSortAsc = false;
+
+        function loadSalesData() {
+            const timeframe = document.getElementById('si-timeframe').value;
+            const datasource = document.getElementById('si-datasource').value;
+            document.getElementById('si-status').textContent = 'Fetching sales data...';
+            fetch('/rapidrms/sales', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({timeframe, datasource})
+            }).then(r => r.json()).then(data => {
+                if (data.error) { toast(data.error, 'error'); document.getElementById('si-status').textContent = 'Error: ' + data.error; return; }
+                salesData = data.items || [];
+                document.getElementById('si-status').textContent = `Loaded ${salesData.length} items (${data.source || datasource})`;
+                renderSalesResults();
+                toast(`${salesData.length} items loaded`, 'success');
+            }).catch(err => { document.getElementById('si-status').textContent = 'Error: ' + err; toast('Failed to load sales', 'error'); });
+        }
+
+        function renderSalesResults() {
+            const table = document.getElementById('si-table');
+            const raw = document.getElementById('si-filter').value.trim().toLowerCase();
+            let items = salesData;
+            if (raw) {
+                items = items.filter(i => i.item_number.toLowerCase().includes(raw) || (i.name||'').toLowerCase().includes(raw));
+            }
+            const tbody = table.querySelector('tbody');
+            tbody.innerHTML = items.map((item, idx) => {
+                const hasSpa = item.spa_info && item.spa_info !== '';
+                const trendIcon = item.trend === 'up' ? '<span style="color:var(--success)">&#9650;</span>' : item.trend === 'down' ? '<span style="color:var(--danger)">&#9660;</span>' : '<span style="color:var(--text-muted)">&#9654;</span>';
+                return `
+                <tr class="${hasSpa ? 'row-sale' : ''}">
+                    <td><input type="checkbox" class="si-row-cb" data-idx="${idx}"></td>
+                    <td style="font-weight:600">${item.item_number}</td>
+                    <td>${item.name || '-'}</td>
+                    <td>${item.units_sold || 0}</td>
+                    <td>$${(item.revenue || 0).toFixed(2)}</td>
+                    <td>${(item.avg_qty || 0).toFixed(1)}</td>
+                    <td>${(item.velocity || 0).toFixed(2)}</td>
+                    <td>${trendIcon}</td>
+                    <td>${hasSpa ? '<span class="badge badge-success">'+item.spa_info+'</span>' : '-'}</td>
+                    <td style="font-weight:600; color:var(--accent)">${item.suggested_qty || '-'}</td>
+                    <td><button class="btn btn-primary btn-sm" onclick="addToBot('${item.item_number}', '${(item.name||'').replace(/'/g,"\\\\'")}', '', '')">+ Bot</button></td>
+                </tr>`;
+            }).join('');
+            table.style.display = items.length > 0 ? 'table' : 'none';
+        }
+
+        function filterSalesResults() { renderSalesResults(); }
+
+        function sortSales(key) {
+            if (salesSortKey === key) salesSortAsc = !salesSortAsc;
+            else { salesSortKey = key; salesSortAsc = false; }
+            salesData.sort((a, b) => {
+                let va = a[key] || 0, vb = b[key] || 0;
+                if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb||'').toLowerCase(); }
+                if (va < vb) return salesSortAsc ? -1 : 1;
+                if (va > vb) return salesSortAsc ? 1 : -1;
+                return 0;
+            });
+            renderSalesResults();
+        }
+
+        function toggleAllSales(cb) {
+            document.querySelectorAll('.si-row-cb').forEach(c => c.checked = cb.checked);
+        }
+
+        function generateOrder() {
+            const timeframe = document.getElementById('si-timeframe').value;
+            const datasource = document.getElementById('si-datasource').value;
+            document.getElementById('si-status').textContent = 'Generating order...';
+            fetch('/generate_order', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({timeframe, datasource, items: salesData})
+            }).then(r => r.json()).then(data => {
+                if (data.error) { toast(data.error, 'error'); return; }
+                salesData = data.items || salesData;
+                document.getElementById('si-status').textContent = `Order generated: ${data.total_items} items, ${data.total_qty} units`;
+                renderSalesResults();
+                toast('Order generated based on velocity', 'success');
+            }).catch(err => toast('Generate failed: ' + err, 'error'));
+        }
+
+        function aiRecommend() {
+            const timeframe = document.getElementById('si-timeframe').value;
+            const datasource = document.getElementById('si-datasource').value;
+            document.getElementById('si-status').textContent = 'Asking Shre AI...';
+            document.getElementById('si-ai-panel').style.display = 'none';
+            fetch('/ai_recommend', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({timeframe, datasource, items: salesData.slice(0, 50)})
+            }).then(r => r.json()).then(data => {
+                if (data.error) { toast(data.error, 'error'); document.getElementById('si-status').textContent = 'AI error: ' + data.error; return; }
+                document.getElementById('si-ai-panel').style.display = 'block';
+                document.getElementById('si-ai-content').textContent = data.recommendation || 'No recommendation returned.';
+                if (data.suggested_items && data.suggested_items.length > 0) {
+                    document.getElementById('si-ai-items').innerHTML = '<div class="card-title" style="margin-top:8px;">Suggested Items</div>' +
+                        data.suggested_items.map(si => `<div style="display:flex; gap:12px; padding:4px 0; font-size:13px;">
+                            <span style="font-weight:600; min-width:60px;">#${si.item_number}</span>
+                            <span style="flex:1">${si.name||''}</span>
+                            <span style="color:var(--accent); font-weight:600;">Qty: ${si.qty}</span>
+                            <button class="btn btn-primary btn-sm" onclick="addToBot('${si.item_number}', '${(si.name||'').replace(/'/g,"\\\\'")}', '', '')" style="padding:2px 8px;">+ Bot</button>
+                        </div>`).join('');
+                }
+                document.getElementById('si-status').textContent = 'AI recommendation received';
+                toast('AI recommendation ready', 'success');
+            }).catch(err => { toast('AI request failed: ' + err, 'error'); document.getElementById('si-status').textContent = 'AI error'; });
+        }
+
+        function pushSelectedToQueue() {
+            const checked = document.querySelectorAll('.si-row-cb:checked');
+            if (checked.length === 0) { toast('Select items to push', 'error'); return; }
+            let pushed = 0;
+            checked.forEach(cb => {
+                const idx = parseInt(cb.dataset.idx);
+                const item = salesData[idx];
+                if (!item) return;
+                const qty = item.suggested_qty || Math.max(1, Math.ceil(item.velocity * 14));
+                fetch('/add_item', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({item_number: item.item_number, name: item.name||'', size: '', quantity: String(qty)})
+                });
+                pushed++;
+            });
+            toast(`${pushed} items pushed to order queue`, 'success');
+        }
+
         // ── Periodic status check ──
         setInterval(() => {
             fetch('/get_status').then(r => r.json()).then(data => updateStatus(data));
@@ -1202,11 +1413,30 @@ def index():
 @app.route('/save_settings', methods=['POST'])
 def save_settings():
     data = request.json
+    # Preserve existing env vars not in this form
+    existing = {}
+    if Path('.env').exists():
+        with open('.env', 'r') as f:
+            for line in f:
+                line = line.strip()
+                if '=' in line and not line.startswith('#'):
+                    k, v = line.split('=', 1)
+                    existing[k.strip()] = v.strip()
+    # Update with form data
+    existing['SITE_USERNAME'] = data['username']
+    existing['SITE_PASSWORD'] = data['password']
+    existing['SITE_URL'] = data['url']
+    existing['HEADLESS'] = str(data.get('headless', False))
+    # Update RapidRMS if provided
+    for key in ['RAPIDRMS_CLIENT_ID', 'RAPIDRMS_USERNAME', 'RAPIDRMS_PASSWORD',
+                'RAPIDRMS_SOURCE', 'DATA_SOURCE', 'SHRE_API_URL']:
+        if key.lower().replace('_', '') in {k.lower().replace('_', '') for k in data}:
+            val = data.get(key, data.get(key.lower(), ''))
+            if val:
+                existing[key] = val
     with open('.env', 'w') as f:
-        f.write(f"SITE_USERNAME={data['username']}\n")
-        f.write(f"SITE_PASSWORD={data['password']}\n")
-        f.write(f"SITE_URL={data['url']}\n")
-        f.write(f"HEADLESS={data.get('headless', False)}\n")
+        for k, v in existing.items():
+            f.write(f"{k}={v}\n")
     load_dotenv(override=True)
     return jsonify({'success': True})
 
@@ -1711,6 +1941,334 @@ def search_order_data():
 
     all_rows.sort(key=lambda x: x.get('sort_date', ''), reverse=True)
     return jsonify({'items': all_rows})
+
+# ── RapidRMS / Sales Intelligence Backend ──
+
+RAPIDRMS_BASE_URL = 'https://rapidrmsapi.azurewebsites.net'
+_rapidrms_token = {'token': None, 'expires': None, 'db_name': None}
+
+
+def _get_timeframe_dates(timeframe):
+    """Convert timeframe code to (from_date, to_date) strings (MM/DD/YYYY)."""
+    today = datetime.now()
+    if timeframe == '1w':
+        start = today - timedelta(days=7)
+    elif timeframe == '2w':
+        start = today - timedelta(days=14)
+    elif timeframe == 'wtd':
+        start = today - timedelta(days=today.weekday())
+    elif timeframe == 'mtd':
+        start = today.replace(day=1)
+    elif timeframe == 'lm':
+        first_this = today.replace(day=1)
+        last_prev = first_this - timedelta(days=1)
+        start = last_prev.replace(day=1)
+        today = last_prev
+    elif timeframe == 'qtd':
+        q_month = ((today.month - 1) // 3) * 3 + 1
+        start = today.replace(month=q_month, day=1)
+    elif timeframe == 'lq':
+        q_month = ((today.month - 1) // 3) * 3 + 1
+        start_this_q = today.replace(month=q_month, day=1)
+        end_last_q = start_this_q - timedelta(days=1)
+        lq_month = ((end_last_q.month - 1) // 3) * 3 + 1
+        start = end_last_q.replace(month=lq_month, day=1)
+        today = end_last_q
+    elif timeframe == 'ytd':
+        start = today.replace(month=1, day=1)
+    elif timeframe == 'ly':
+        start = today.replace(year=today.year - 1, month=1, day=1)
+        today = today.replace(year=today.year - 1, month=12, day=31)
+    else:
+        start = today - timedelta(days=30)
+    return start.strftime('%m/%d/%Y'), today.strftime('%m/%d/%Y')
+
+
+def _rapidrms_auth():
+    """Authenticate with RapidRMS API, return token or raise."""
+    load_dotenv()
+    client_id = os.getenv('RAPIDRMS_CLIENT_ID', '')
+    username = os.getenv('RAPIDRMS_USERNAME', '')
+    password = os.getenv('RAPIDRMS_PASSWORD', '')
+    if not client_id or not username or not password:
+        return None, 'RapidRMS credentials not configured in .env'
+
+    # Check cached token
+    if (_rapidrms_token['token'] and _rapidrms_token['expires']
+            and datetime.now() < _rapidrms_token['expires']):
+        return _rapidrms_token['token'], None
+
+    try:
+        resp = http_requests.post(f'{RAPIDRMS_BASE_URL}/api/Login/Auth', json={
+            'grant_type': 'token',
+            'client_id': client_id,
+            'Username': username,
+            'Password': password,
+        }, timeout=15)
+        data = resp.json()
+        if str(data.get('code')) != '999':
+            return None, f"RapidRMS auth failed: {data.get('message', 'Unknown error')}"
+
+        token_raw = data.get('data', '')
+        if isinstance(token_raw, str):
+            try:
+                token_data = json.loads(token_raw)
+            except (json.JSONDecodeError, TypeError):
+                token_data = {'access_token': token_raw}
+        else:
+            token_data = token_raw
+
+        token = token_data.get('access_token', token_raw)
+        db_name = token_data.get('branchDbName', os.getenv('RAPIDRMS_SOURCE', 'RapidRMS'))
+        _rapidrms_token['token'] = token
+        _rapidrms_token['db_name'] = db_name
+        _rapidrms_token['expires'] = datetime.now() + timedelta(seconds=550)
+        return token, None
+    except Exception as e:
+        return None, f'RapidRMS auth error: {e}'
+
+
+def _rapidrms_get(endpoint, params=None):
+    """Make authenticated GET to RapidRMS API."""
+    token, err = _rapidrms_auth()
+    if err:
+        return None, err
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json',
+        'DbName': _rapidrms_token.get('db_name', 'RapidRMS'),
+    }
+    try:
+        resp = http_requests.get(f'{RAPIDRMS_BASE_URL}{endpoint}',
+                                 headers=headers, params=params, timeout=30)
+        return resp.json(), None
+    except Exception as e:
+        return None, f'RapidRMS request error: {e}'
+
+
+def _fetch_sales_direct(from_date, to_date):
+    """Fetch sales from RapidRMS API directly."""
+    all_invoices = []
+    page = 1
+    while True:
+        data, err = _rapidrms_get('/api/InvoiceReport', {
+            'FromDate': from_date,
+            'ToDate': to_date,
+            'pageNo': page,
+            'pageSize': 500,
+        })
+        if err:
+            return None, err
+        items = data if isinstance(data, list) else data.get('data', [])
+        if not items:
+            break
+        all_invoices.extend(items)
+        if len(items) < 500:
+            break
+        page += 1
+
+    # Aggregate by item number
+    agg = {}
+    for inv in all_invoices:
+        details = inv.get('invoiceDetails', []) if isinstance(inv, dict) else []
+        for detail in details:
+            item_num = str(detail.get('itemNo', detail.get('item_no', ''))).strip()
+            if not item_num:
+                continue
+            if item_num not in agg:
+                agg[item_num] = {
+                    'item_number': item_num,
+                    'name': detail.get('itemName', detail.get('item_name', '')),
+                    'units_sold': 0,
+                    'revenue': 0.0,
+                    'txn_count': 0,
+                    'total_qty': 0,
+                }
+            qty = float(detail.get('qty', detail.get('quantity', 0)) or 0)
+            price = float(detail.get('totalPrice', detail.get('total_price', 0)) or 0)
+            agg[item_num]['units_sold'] += qty
+            agg[item_num]['revenue'] += price
+            agg[item_num]['txn_count'] += 1
+            agg[item_num]['total_qty'] += qty
+
+    return list(agg.values()), None
+
+
+def _fetch_sales_cortex(from_date, to_date):
+    """Fetch sales from CortexDB."""
+    try:
+        resp = http_requests.post('http://127.0.0.1:5400/v1/query', json={
+            'query': 'sales_by_item',
+            'params': {'from_date': from_date, 'to_date': to_date},
+        }, timeout=15)
+        data = resp.json()
+        items = data.get('data', data.get('rows', []))
+        result = []
+        for row in items:
+            result.append({
+                'item_number': str(row.get('item_number', row.get('item_no', ''))),
+                'name': row.get('name', row.get('item_name', '')),
+                'units_sold': float(row.get('units_sold', row.get('qty_sold', 0)) or 0),
+                'revenue': float(row.get('revenue', row.get('total_revenue', 0)) or 0),
+                'txn_count': int(row.get('txn_count', row.get('transaction_count', 0)) or 0),
+                'total_qty': float(row.get('total_qty', row.get('qty_sold', 0)) or 0),
+            })
+        return result, None
+    except Exception as e:
+        return None, f'CortexDB query error: {e}'
+
+
+def _enrich_sales_items(items, from_date, to_date):
+    """Add velocity, trend, avg_qty, suggested_qty, and SPA info."""
+    from_dt = datetime.strptime(from_date, '%m/%d/%Y')
+    to_dt = datetime.strptime(to_date, '%m/%d/%Y')
+    days = max((to_dt - from_dt).days, 1)
+
+    # Load SPA data if available
+    spa_lookup = _load_future_spa()
+
+    for item in items:
+        sold = item.get('units_sold', 0)
+        txns = item.get('txn_count', 1) or 1
+        item['avg_qty'] = sold / txns
+        item['velocity'] = sold / days
+        # Simple trend: high velocity = up
+        if item['velocity'] > 1.0:
+            item['trend'] = 'up'
+        elif item['velocity'] < 0.2:
+            item['trend'] = 'down'
+        else:
+            item['trend'] = 'flat'
+        # Suggested order: 2 weeks of velocity, rounded up to nearest case
+        item['suggested_qty'] = max(1, round(item['velocity'] * 14))
+        # SPA info
+        spa = spa_lookup.get(item['item_number'], {})
+        if spa:
+            item['spa_info'] = f"{spa.get('spa_date', '')} {spa.get('spa_discount', '')}".strip()
+        else:
+            item['spa_info'] = ''
+
+    items.sort(key=lambda x: x.get('units_sold', 0), reverse=True)
+    return items
+
+
+@app.route('/rapidrms/sales', methods=['POST'])
+def rapidrms_sales():
+    data = request.json
+    timeframe = data.get('timeframe', 'mtd')
+    datasource = data.get('datasource', 'direct')
+    from_date, to_date = _get_timeframe_dates(timeframe)
+
+    if datasource == 'cortex':
+        items, err = _fetch_sales_cortex(from_date, to_date)
+    else:
+        items, err = _fetch_sales_direct(from_date, to_date)
+
+    if err:
+        return jsonify({'error': err, 'items': []})
+
+    items = _enrich_sales_items(items, from_date, to_date)
+    return jsonify({
+        'items': items,
+        'source': datasource,
+        'from_date': from_date,
+        'to_date': to_date,
+        'count': len(items),
+    })
+
+
+@app.route('/generate_order', methods=['POST'])
+def generate_order():
+    data = request.json
+    items = data.get('items', [])
+    if not items:
+        return jsonify({'error': 'No sales data. Fetch sales first.'})
+
+    total_qty = 0
+    total_items = 0
+    for item in items:
+        qty = item.get('suggested_qty', 0)
+        if qty and qty > 0:
+            total_items += 1
+            total_qty += qty
+
+    return jsonify({
+        'items': items,
+        'total_items': total_items,
+        'total_qty': total_qty,
+    })
+
+
+@app.route('/ai_recommend', methods=['POST'])
+def ai_recommend():
+    load_dotenv()
+    shre_url = os.getenv('SHRE_API_URL', 'https://127.0.0.1:5497')
+    data = request.json
+    timeframe = data.get('timeframe', 'mtd')
+    items = data.get('items', [])
+
+    # Build prompt with sales context
+    items_summary = '\n'.join([
+        f"  #{it['item_number']} {it.get('name','')} - sold:{it.get('units_sold',0)} rev:${it.get('revenue',0):.2f} velocity:{it.get('velocity',0):.2f}/day"
+        for it in items[:30]
+    ])
+
+    prompt = f"""You are an order intelligence assistant for a Mississippi liquor store.
+Based on the following sales data for the {timeframe} timeframe, recommend what to order.
+Consider: sales velocity, revenue contribution, upcoming promotions, and seasonal trends.
+
+Sales Data (top items):
+{items_summary}
+
+Provide:
+1. A brief analysis of the sales pattern
+2. Specific order recommendations with item numbers and quantities
+3. Any items to watch or increase stock on
+
+Format your response as plain text. For suggested items, include them as:
+ITEM: #<number> <name> QTY: <quantity>"""
+
+    try:
+        resp = http_requests.post(f'{shre_url}/v1/chat', json={
+            'messages': [{'role': 'user', 'content': prompt}],
+            'model': 'auto',
+            'agentId': 'liquor-bot',
+            'stream': False,
+            'metadata': {'taskType': 'order-intelligence'},
+        }, timeout=60, verify=False)
+        result = resp.json()
+        content = (
+            result.get('content', [{}])[0].get('text', '')
+            if isinstance(result.get('content'), list)
+            else result.get('message', {}).get('content', '')
+            or result.get('choices', [{}])[0].get('message', {}).get('content', '')
+            or str(result)
+        )
+
+        # Parse suggested items from response
+        suggested = []
+        for line in content.split('\n'):
+            if 'ITEM:' in line and 'QTY:' in line:
+                try:
+                    item_part = line.split('ITEM:')[1].split('QTY:')[0].strip()
+                    qty_part = line.split('QTY:')[1].strip().split()[0]
+                    item_num = ''.join(c for c in item_part.split()[0] if c.isdigit())
+                    item_name = ' '.join(item_part.split()[1:])
+                    suggested.append({
+                        'item_number': item_num,
+                        'name': item_name,
+                        'qty': int(qty_part),
+                    })
+                except (IndexError, ValueError):
+                    pass
+
+        return jsonify({
+            'recommendation': content,
+            'suggested_items': suggested,
+        })
+    except Exception as e:
+        return jsonify({'error': f'Shre AI unavailable: {e}', 'recommendation': '', 'suggested_items': []})
+
 
 def run_bot_thread():
     """Run the bot in a separate thread, reusing bot_script.py logic."""
