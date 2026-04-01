@@ -55,237 +55,794 @@ logger = logging.getLogger(__name__)
 # HTML template
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Mississippi DOR Order Bot</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MS DOR Order Bot</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #333; border-bottom: 3px solid #007bff; padding-bottom: 10px; }
-        .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
-        .tab { padding: 10px 20px; background: #f0f0f0; cursor: pointer; border-radius: 5px; transition: all 0.3s; }
-        .tab:hover { background: #e0e0e0; }
-        .tab.active { background: #007bff; color: white; }
-        .tab-content { display: none; padding: 20px; background: #f9f9f9; border-radius: 5px; }
+        :root {
+            --bg-primary: #0f1117;
+            --bg-secondary: #1a1d27;
+            --bg-card: #21242f;
+            --bg-input: #2a2d3a;
+            --bg-hover: #2e3140;
+            --border: #333750;
+            --text-primary: #e4e6ef;
+            --text-secondary: #8b8fa3;
+            --text-muted: #5d6178;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --accent-glow: rgba(99,102,241,0.15);
+            --success: #22c55e;
+            --success-bg: rgba(34,197,94,0.12);
+            --danger: #ef4444;
+            --danger-bg: rgba(239,68,68,0.12);
+            --warning: #f59e0b;
+            --warning-bg: rgba(245,158,11,0.12);
+            --info: #3b82f6;
+            --radius: 10px;
+            --radius-sm: 6px;
+            --shadow: 0 4px 24px rgba(0,0,0,0.3);
+            --transition: 0.2s ease;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        .app-header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .app-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .app-title .logo {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent), #a78bfa);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .status-pill.running { background: var(--success-bg); color: var(--success); }
+        .status-pill.stopped { background: var(--danger-bg); color: var(--danger); }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-dot.running { background: var(--success); box-shadow: 0 0 8px var(--success); animation: pulse 2s infinite; }
+        .status-dot.stopped { background: var(--danger); }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+            padding: 4px;
+            margin-bottom: 20px;
+            overflow-x: auto;
+            border: 1px solid var(--border);
+        }
+        .tab {
+            padding: 10px 18px;
+            cursor: pointer;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            transition: var(--transition);
+            white-space: nowrap;
+            user-select: none;
+        }
+        .tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+        .tab.active {
+            background: var(--accent);
+            color: white;
+            box-shadow: 0 2px 8px rgba(99,102,241,0.3);
+        }
+        .tab-content { display: none; animation: fadeIn 0.3s ease; }
         .tab-content.active { display: block; }
-        input, select { padding: 8px; margin: 5px; border: 1px solid #ddd; border-radius: 4px; }
-        button { padding: 10px 20px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #0056b3; }
-        button.danger { background: #dc3545; }
-        button.danger:hover { background: #c82333; }
-        button.success { background: #28a745; }
-        button.success:hover { background: #218838; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th { background: #007bff; color: white; }
-        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-        tr:nth-child(even) { background: #f9f9f9; }
-        .status { font-size: 20px; font-weight: bold; margin: 20px 0; padding: 10px; border-radius: 5px; }
-        .running { background: #d4edda; color: #155724; }
-        .stopped { background: #f8d7da; color: #721c24; }
-        #logs-content { background: #2c3e50; color: #ecf0f1; padding: 15px; height: 400px; overflow-y: scroll; font-family: monospace; font-size: 12px; border-radius: 5px; }
-        .log-entry { margin: 2px 0; }
-        .stats-box { background: #e9ecef; padding: 15px; border-radius: 5px; margin: 20px 0; }
-        .input-group { margin: 10px 0; }
-        .input-group label { display: inline-block; width: 120px; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        .card-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 16px;
+        }
+        /* Forms */
+        input[type="text"], input[type="password"], input[type="number"] {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 10px 14px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            outline: none;
+            transition: var(--transition);
+        }
+        input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+        input::placeholder { color: var(--text-muted); }
+        .input-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        .input-row label {
+            min-width: 100px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+        .input-row input { flex: 1; max-width: 360px; }
+        /* Checkbox */
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 12px 0;
+            font-size: 14px;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .checkbox-row input[type="checkbox"] {
+            accent-color: var(--accent);
+            width: 16px;
+            height: 16px;
+        }
+        /* Buttons */
+        .btn {
+            padding: 9px 18px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-primary { background: var(--accent); color: white; }
+        .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(99,102,241,0.3); }
+        .btn-success { background: var(--success); color: white; }
+        .btn-success:hover { background: #16a34a; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-ghost { background: var(--bg-input); color: var(--text-secondary); border: 1px solid var(--border); }
+        .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .btn-sm { padding: 5px 12px; font-size: 12px; }
+        .btn-lg { padding: 14px 32px; font-size: 16px; }
+        .btn-group { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+        /* Tables */
+        table { width: 100%; border-collapse: separate; border-spacing: 0; }
+        thead th {
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            cursor: pointer;
+            user-select: none;
+        }
+        thead th:hover { color: var(--accent); }
+        tbody td {
+            padding: 10px 14px;
+            font-size: 14px;
+            border-bottom: 1px solid rgba(51,55,80,0.5);
+            transition: var(--transition);
+        }
+        tbody tr { transition: var(--transition); }
+        tbody tr:hover { background: var(--bg-hover); }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .badge-success { background: var(--success-bg); color: var(--success); }
+        .badge-warning { background: var(--warning-bg); color: var(--warning); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); }
+        /* Stats grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        /* Progress bar */
+        .progress-bar {
+            height: 8px;
+            background: var(--bg-input);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--success));
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+        /* Control panel */
+        .control-center {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+        }
+        .power-btn {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 3px solid var(--border);
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font-size: 40px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .power-btn:hover { border-color: var(--accent); color: var(--accent); transform: scale(1.05); }
+        .power-btn.running {
+            border-color: var(--success);
+            color: var(--success);
+            box-shadow: 0 0 30px rgba(34,197,94,0.2);
+            animation: pulseGlow 2s infinite;
+        }
+        @keyframes pulseGlow {
+            0%, 100% { box-shadow: 0 0 20px rgba(34,197,94,0.15); }
+            50% { box-shadow: 0 0 40px rgba(34,197,94,0.3); }
+        }
+        /* Logs */
+        .log-container {
+            background: #0d1017;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            height: 450px;
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .log-entry {
+            padding: 2px 0;
+            color: var(--text-secondary);
+            border-bottom: 1px solid rgba(51,55,80,0.2);
+        }
+        .log-entry:hover { color: var(--text-primary); }
+        /* Toast notifications */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .toast {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 12px 20px;
+            min-width: 280px;
+            box-shadow: var(--shadow);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideIn 0.3s ease;
+            font-size: 14px;
+        }
+        .toast.success { border-left: 3px solid var(--success); }
+        .toast.error { border-left: 3px solid var(--danger); }
+        .toast.info { border-left: 3px solid var(--info); }
+        .toast .close-toast {
+            margin-left: auto;
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 16px;
+        }
+        .toast .close-toast:hover { color: var(--text-primary); }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: none; opacity: 1; } }
+        @keyframes slideOut { from { transform: none; opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+        /* File list */
+        .file-list {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-bottom: 16px;
+        }
+        .file-list label {
+            display: block;
+            padding: 4px 0;
+            font-size: 13px;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .file-list label:hover { color: var(--text-primary); }
+        /* Order data row highlights */
+        .row-sale { background: rgba(34,197,94,0.08) !important; }
+        .row-sale:hover { background: rgba(34,197,94,0.15) !important; }
+        .row-special { background: rgba(239,68,68,0.08) !important; }
+        .row-special:hover { background: rgba(239,68,68,0.15) !important; }
+        .low-stock {
+            background: var(--warning);
+            color: #000;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        /* Instructions */
+        .instructions {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 16px 20px;
+            margin-top: 16px;
+        }
+        .instructions ol {
+            padding-left: 20px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 2;
+        }
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container { padding: 12px; }
+            .tabs { flex-wrap: nowrap; overflow-x: auto; }
+            .input-row { flex-direction: column; align-items: stretch; }
+            .input-row label { min-width: auto; }
+            .input-row input { max-width: 100%; }
+            .stats-grid { grid-template-columns: 1fr 1fr; }
+            .btn-group { flex-direction: column; }
+            .app-header { flex-direction: column; gap: 10px; }
+            table { font-size: 12px; }
+            thead th, tbody td { padding: 8px; }
+        }
+        /* Light mode */
+        [data-theme="light"] {
+            --bg-primary: #f5f6fa;
+            --bg-secondary: #ffffff;
+            --bg-card: #ffffff;
+            --bg-input: #f0f1f5;
+            --bg-hover: #e8e9f0;
+            --border: #d4d6e0;
+            --text-primary: #1a1d2e;
+            --text-secondary: #5c6078;
+            --text-muted: #9498b0;
+            --accent: #6366f1;
+            --accent-hover: #4f46e5;
+            --accent-glow: rgba(99,102,241,0.12);
+            --success-bg: rgba(34,197,94,0.1);
+            --danger-bg: rgba(239,68,68,0.1);
+            --warning-bg: rgba(245,158,11,0.1);
+            --shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        [data-theme="light"] .log-container { background: #f8f9fc; }
+        [data-theme="light"] .log-entry { color: #3c3f52; }
+        [data-theme="light"] .log-entry:hover { color: #1a1d2e; }
+        [data-theme="light"] .toast { background: #fff; }
+        /* Theme toggle button */
+        .theme-toggle {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+        }
+        .theme-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+        /* Hidden file input */
+        .hidden { display: none; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🛒 Mississippi DOR Order Bot</h1>
-        
-        <div class="tabs">
-            <div class="tab active" onclick="showTab('settings')">⚙️ Settings</div>
-            <div class="tab" onclick="showTab('orders')">📋 Orders</div>
-            <div class="tab" onclick="showTab('control')">🎮 Control</div>
-            <div class="tab" onclick="showTab('logs')">📜 Logs</div>
-            <div class="tab" onclick="showTab('orderdata')">📂 Order Data</div>
-            <div class="tab" onclick="showTab('specialorders')">⭐ Special Orders</div>
+    <div class="toast-container" id="toast-container"></div>
+
+    <header class="app-header">
+        <div class="app-title">
+            <div class="logo">B</div>
+            MS DOR Order Bot
         </div>
-        
-        <div id="settings" class="tab-content active">
-            <h2>Login Settings</h2>
-            <div class="input-group">
-                <label>Username:</label>
-                <input type="text" id="username" placeholder="Enter username" style="width: 300px;">
+        <div style="display:flex; align-items:center; gap:12px;">
+            <div id="header-status" class="status-pill stopped">
+                <span class="status-dot stopped" id="header-dot"></span>
+                <span id="header-status-text">Stopped</span>
             </div>
-            <div class="input-group">
-                <label>Password:</label>
-                <input type="password" id="password" placeholder="Enter password" style="width: 300px;">
+            <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode">&#9790;</button>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="tabs">
+            <div class="tab active" onclick="showTab('control', this)">Control</div>
+            <div class="tab" onclick="showTab('orders', this)">Orders</div>
+            <div class="tab" onclick="showTab('settings', this)">Settings</div>
+            <div class="tab" onclick="showTab('logs', this)">Logs</div>
+            <div class="tab" onclick="showTab('orderdata', this)">Order Data</div>
+            <div class="tab" onclick="showTab('specialorders', this)">Special Orders</div>
+        </div>
+
+        <!-- Control Tab -->
+        <div id="control" class="tab-content active">
+            <div class="stats-grid" id="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-total" style="color:var(--accent)">0</div>
+                    <div class="stat-label">Total Items</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-completed" style="color:var(--success)">0</div>
+                    <div class="stat-label">Completed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-remaining" style="color:var(--warning)">0</div>
+                    <div class="stat-label">Remaining</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-percent" style="color:var(--text-primary)">0%</div>
+                    <div class="stat-label">Progress</div>
+                </div>
             </div>
-            <div class="input-group">
-                <label>Site URL:</label>
-                <input type="text" id="url" value="https://tap.dor.ms.gov/" style="width: 300px;">
+            <div class="card">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
+                </div>
             </div>
-            <div class="input-group">
-                <label>Headless Mode:</label>
-                <input type="checkbox" id="headless"> Run in background (no browser window)
+            <div class="card">
+                <div class="control-center">
+                    <button class="power-btn" id="power-btn" onclick="toggleBot()" title="Start/Stop Bot">&#9654;</button>
+                    <div id="control-status" style="font-size:18px; font-weight:600; color:var(--text-secondary)">Press to Start</div>
+                </div>
             </div>
-            <button class="success" onclick="saveSettings()">💾 Save Settings</button>
-            
-            <div class="stats-box" style="margin-top: 30px;">
-                <h3>📖 Instructions</h3>
+        </div>
+
+        <!-- Orders Tab -->
+        <div id="orders" class="tab-content">
+            <div class="card">
+                <div class="card-title">Add Item</div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end;">
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Item #</label>
+                        <input type="number" id="item_number" placeholder="12345" style="width:120px;">
+                    </div>
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Name</label>
+                        <input type="text" id="item_name" placeholder="Product name" style="width:200px;">
+                    </div>
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Size</label>
+                        <input type="text" id="item_size" placeholder="750ml" style="width:100px;">
+                    </div>
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Qty</label>
+                        <input type="number" id="quantity" placeholder="10" style="width:80px;">
+                    </div>
+                    <button class="btn btn-success" onclick="addItem()">+ Add</button>
+                </div>
+            </div>
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <div class="card-title" style="margin-bottom:0">Order Queue</div>
+                    <div class="btn-group" style="margin-bottom:0">
+                        <button class="btn btn-ghost btn-sm" onclick="loadOrders()">Refresh</button>
+                        <button class="btn btn-ghost btn-sm" onclick="sortOrders()">Sort #</button>
+                        <button class="btn btn-ghost btn-sm" onclick="downloadCSV()">Export</button>
+                        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('file-upload').click()">Import</button>
+                        <button class="btn btn-danger btn-sm" onclick="clearCompleted()">Clear Done</button>
+                        <input type="file" id="file-upload" class="hidden" accept=".csv" onchange="uploadCSV(event)">
+                    </div>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table id="orders-table">
+                        <thead>
+                            <tr>
+                                <th>Item #</th>
+                                <th>Name</th>
+                                <th>Size</th>
+                                <th>Units</th>
+                                <th>Qty</th>
+                                <th>Status</th>
+                                <th style="width:80px">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div id="settings" class="tab-content">
+            <div class="card">
+                <div class="card-title">Login Credentials</div>
+                <div class="input-row">
+                    <label>Username</label>
+                    <input type="text" id="username" placeholder="Enter username">
+                </div>
+                <div class="input-row">
+                    <label>Password</label>
+                    <input type="password" id="password" placeholder="Enter password">
+                </div>
+                <div class="input-row">
+                    <label>Site URL</label>
+                    <input type="text" id="url" value="https://tap.dor.ms.gov/">
+                </div>
+                <label class="checkbox-row">
+                    <input type="checkbox" id="headless">
+                    Run in background (headless mode)
+                </label>
+                <button class="btn btn-primary" onclick="saveSettings()" style="margin-top:8px;">Save Settings</button>
+            </div>
+            <div class="instructions">
+                <div class="card-title">Getting Started</div>
                 <ol>
-                    <li>Enter your login credentials above and save</li>
-                    <li>Add items to order in the 'Orders' tab</li>
-                    <li>Go to 'Control' tab and click 'Start Bot'</li>
-                    <li>For first-time use, complete 2FA manually in the browser</li>
-                    <li>The bot will continuously process orders until stopped</li>
+                    <li>Enter your DOR login credentials above and save</li>
+                    <li>Add items to the order queue in the <strong>Orders</strong> tab</li>
+                    <li>Go to <strong>Control</strong> and press the power button to start</li>
+                    <li>For first-time use, complete 2FA manually in the browser window</li>
+                    <li>The bot runs continuously until you stop it</li>
                 </ol>
             </div>
         </div>
-        
-        <div id="orders" class="tab-content">
-            <h2>Order Items</h2>
-            <div style="margin-bottom: 20px;">
-                <input type="number" id="item_number" placeholder="Item Number" style="width: 130px;">
-                <input type="text" id="item_name" placeholder="Name" style="width: 200px;">
-                <input type="text" id="item_size" placeholder="Size" style="width: 80px;">
-                <input type="number" id="quantity" placeholder="Quantity" style="width: 100px;">
-                <button class="success" onclick="addItem()">➕ Add Item</button>
-                <button onclick="loadOrders()">🔄 Refresh</button>
-                <button class="danger" onclick="clearCompleted()">🗑️ Clear Completed</button>
-                <button onclick="sortOrders()">🔢 Sort by Item #</button>
-                <button onclick="downloadCSV()">📥 Download CSV</button>
-                <button onclick="document.getElementById('file-upload').click()">📤 Upload CSV</button>
-                <input type="file" id="file-upload" style="display: none;" accept=".csv" onchange="uploadCSV(event)">
-            </div>
-            <table id="orders-table">
-                <thead>
-                    <tr>
-                        <th>Item Number</th>
-                        <th>Name</th>
-                        <th>Size</th>
-                        <th>Units</th>
-                        <th>Quantity</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        </div>
-        
-        <div id="control" class="tab-content">
-            <h2>Bot Control</h2>
-            <button id="bot-toggle" class="success" onclick="toggleBot()" style="font-size: 18px; padding: 15px 30px;">▶️ Start Bot</button>
-            <div id="status" class="status stopped">⭕ Status: Stopped</div>
-            <div class="stats-box">
-                <h3>📊 Statistics</h3>
-                <div id="stats">Loading...</div>
-            </div>
-        </div>
-        
+
+        <!-- Logs Tab -->
         <div id="logs" class="tab-content">
-            <h2>System Logs</h2>
-            <button class="danger" onclick="clearLogs()">🗑️ Clear Logs</button>
-            <button onclick="loadLogs()">🔄 Refresh Logs</button>
-            <div id="logs-content"></div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                <div class="card-title" style="margin-bottom:0">System Logs</div>
+                <div class="btn-group" style="margin-bottom:0">
+                    <button class="btn btn-ghost btn-sm" onclick="loadLogs()">Refresh</button>
+                    <button class="btn btn-danger btn-sm" onclick="clearLogs()">Clear</button>
+                </div>
+            </div>
+            <div class="log-container" id="logs-content"></div>
         </div>
-        
+
+        <!-- Order Data Tab -->
         <div id="orderdata" class="tab-content">
-            <h2>Order Data Lookup</h2>
-            <p style="color:#666; margin-bottom:15px;">Select order files to search across. Shows all items with their source file and order date.</p>
-            <div style="margin-bottom:15px;">
-                <button onclick="loadOrderFiles()">🔄 Refresh Files</button>
-                <button class="success" onclick="searchOrderData()">🔍 Search Selected</button>
-                <label style="margin-left:15px; cursor:pointer;"><input type="checkbox" id="select-all-files" onchange="toggleAllFiles(this)"> Select All</label>
+            <div class="card">
+                <div class="card-title">Order Data Lookup</div>
+                <p style="color:var(--text-muted); font-size:13px; margin-bottom:12px;">Select order files to search across. Shows all items with source file and order date.</p>
+                <div class="btn-group">
+                    <button class="btn btn-ghost btn-sm" onclick="loadOrderFiles()">Refresh Files</button>
+                    <button class="btn btn-primary btn-sm" onclick="searchOrderData()">Search Selected</button>
+                    <label class="checkbox-row" style="margin:0;">
+                        <input type="checkbox" id="select-all-files" onchange="toggleAllFiles(this)"> Select All
+                    </label>
+                </div>
+                <div class="file-list" id="order-files-list"></div>
+                <div style="display:flex; flex-wrap:wrap; gap:16px; margin-bottom:12px;">
+                    <label class="checkbox-row" style="margin:0;">
+                        <input type="checkbox" id="include-special-orders" checked> Special Orders
+                    </label>
+                    <label class="checkbox-row" style="margin:0;">
+                        <input type="checkbox" id="include-current-prices" checked> Current Prices
+                    </label>
+                    <label class="checkbox-row" style="margin:0;">
+                        <input type="checkbox" id="include-sales-data" checked> Sales Data
+                    </label>
+                </div>
+                <div id="order-data-status" style="margin-bottom:10px; font-weight:600; color:var(--text-secondary);"></div>
+                <input type="text" id="item-search-filter" placeholder="Item #s (comma-separated) or Name/Category..." oninput="filterOrderResults()" onkeydown="if(event.key==='Enter')searchOrderData()" style="width:100%; max-width:500px; margin-bottom:12px;">
             </div>
-            <div id="order-files-list" style="background:#f0f0f0; padding:10px; border-radius:5px; margin-bottom:20px; max-height:200px; overflow-y:auto;"></div>
-            <div style="margin-bottom:10px;">
-                <label style="cursor:pointer;"><input type="checkbox" id="include-special-orders" checked> Include Special Orders</label>
-                <label style="margin-left:15px; cursor:pointer;"><input type="checkbox" id="include-current-prices" checked> Include Current Prices</label>
-                <label style="margin-left:15px; cursor:pointer;"><input type="checkbox" id="include-sales-data" checked> Include Sales Data</label>
-            </div>
-            <div id="order-data-status" style="margin-bottom:10px; font-weight:bold;"></div>
-            <div style="margin-bottom:10px;">
-                <input type="text" id="item-search-filter" placeholder="Item #s (comma-separated) or Name/Category..." oninput="filterOrderResults()" onkeydown="if(event.key==='Enter')searchOrderData()" style="width:400px; padding:8px;">
-            </div>
-            <div style="overflow-x:auto;">
+            <div class="card" style="overflow-x:auto;">
                 <table id="order-data-table" style="display:none;">
                     <thead>
                         <tr>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('item_num')">Item # ⇅</th>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('size')">Size ⇅</th>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('units')">Units ⇅</th>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('available')">Available ⇅</th>
-                            <th>Qty Requested</th>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('units_sold')">Units Sold ⇅</th>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('qty_on_hand')">Qty On Hand ⇅</th>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('name')">Name ⇅</th>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('source_file')">Source ⇅</th>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('spa_date')">Sale Date ⇅</th>
+                            <th onclick="sortOrderResults('item_num')">Item #</th>
+                            <th onclick="sortOrderResults('size')">Size</th>
+                            <th onclick="sortOrderResults('units')">Units</th>
+                            <th onclick="sortOrderResults('available')">Avail</th>
+                            <th>Qty Req</th>
+                            <th onclick="sortOrderResults('units_sold')">Sold</th>
+                            <th onclick="sortOrderResults('qty_on_hand')">On Hand</th>
+                            <th onclick="sortOrderResults('name')">Name</th>
+                            <th onclick="sortOrderResults('source_file')">Source</th>
+                            <th onclick="sortOrderResults('spa_date')">Sale Date</th>
                             <th>SPA Price</th>
-                            <th style="cursor:pointer;" onclick="sortOrderResults('case_cost')">Case Cost ⇅</th>
+                            <th onclick="sortOrderResults('case_cost')">Case Cost</th>
                             <th>Discount</th>
-                            <th>Actions</th>
+                            <th style="width:70px">Action</th>
                         </tr>
                     </thead>
                     <tbody></tbody>
                 </table>
             </div>
         </div>
-        
+
+        <!-- Special Orders Tab -->
         <div id="specialorders" class="tab-content">
-            <h2>Special Orders</h2>
-            <p style="color:#666; margin-bottom:15px;">Manage special order items. These can be searched from the Order Data tab.</p>
-            <div style="margin-bottom:20px;">
-                <input type="number" id="so-item-number" placeholder="Item Number" style="width:130px;">
-                <input type="number" id="so-quantity" placeholder="Quantity" style="width:100px;">
-                <input type="text" id="so-name" placeholder="Name" style="width:200px;">
-                <input type="text" id="so-order-number" placeholder="Order Number" style="width:130px;">
-                <input type="text" id="so-order-date" placeholder="Order Date" style="width:130px;">
-                <button class="success" onclick="addSpecialOrder()">➕ Add</button>
-                <button onclick="loadSpecialOrders()">🔄 Refresh</button>
+            <div class="card">
+                <div class="card-title">Add Special Order</div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end;">
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Item #</label>
+                        <input type="number" id="so-item-number" placeholder="12345" style="width:120px;">
+                    </div>
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Qty</label>
+                        <input type="number" id="so-quantity" placeholder="10" style="width:80px;">
+                    </div>
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Name</label>
+                        <input type="text" id="so-name" placeholder="Product name" style="width:200px;">
+                    </div>
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Order #</label>
+                        <input type="text" id="so-order-number" placeholder="SO-001" style="width:120px;">
+                    </div>
+                    <div>
+                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Date</label>
+                        <input type="text" id="so-order-date" placeholder="MM/DD/YY" style="width:120px;">
+                    </div>
+                    <button class="btn btn-success" onclick="addSpecialOrder()">+ Add</button>
+                    <button class="btn btn-ghost" onclick="loadSpecialOrders()">Refresh</button>
+                </div>
             </div>
-            <table id="special-orders-table">
-                <thead>
-                    <tr>
-                        <th>Item Number</th>
-                        <th>Quantity</th>
-                        <th>Name</th>
-                        <th>Order Number</th>
-                        <th>Order Date</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
+            <div class="card" style="overflow-x:auto;">
+                <table id="special-orders-table">
+                    <thead>
+                        <tr>
+                            <th>Item #</th>
+                            <th>Qty</th>
+                            <th>Name</th>
+                            <th>Order #</th>
+                            <th>Date</th>
+                            <th style="width:80px">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
         </div>
     </div>
-    
+
     <script>
-        let logsInterval;
-        let ordersInterval;
-        
-        function showTab(tabName) {
+        let logsInterval, ordersInterval, logEventSource;
+
+        // ── Toast notifications ──
+        function toast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const t = document.createElement('div');
+            t.className = `toast ${type}`;
+            t.innerHTML = `<span>${message}</span><span class="close-toast" onclick="this.parentElement.remove()">&times;</span>`;
+            container.appendChild(t);
+            setTimeout(() => { t.style.animation = 'slideOut 0.3s ease forwards'; setTimeout(() => t.remove(), 300); }, 4000);
+        }
+
+        // ── Tabs ──
+        function showTab(tabName, el) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
+            if (el) el.classList.add('active');
             document.getElementById(tabName).classList.add('active');
-            
-            if (tabName === 'logs') {
-                loadLogs();
-                logsInterval = setInterval(loadLogs, 2000);
-            } else {
-                clearInterval(logsInterval);
-            }
-            
-            if (tabName === 'orders') {
-                loadOrders();
-                ordersInterval = setInterval(loadOrders, 5000);
-            } else {
-                clearInterval(ordersInterval);
-            }
-            
-            if (tabName === 'orderdata') {
-                loadOrderFiles();
-            }
-            
-            if (tabName === 'specialorders') {
-                loadSpecialOrders();
-            }
+
+            clearInterval(logsInterval);
+            clearInterval(ordersInterval);
+            if (logEventSource) { logEventSource.close(); logEventSource = null; }
+
+            if (tabName === 'logs') { loadLogs(); startLogStream(); }
+            if (tabName === 'orders') { loadOrders(); ordersInterval = setInterval(loadOrders, 5000); }
+            if (tabName === 'orderdata') loadOrderFiles();
+            if (tabName === 'specialorders') loadSpecialOrders();
         }
-        
+
+        // ── SSE log streaming ──
+        function startLogStream() {
+            if (logEventSource) logEventSource.close();
+            logEventSource = new EventSource('/stream_logs');
+            logEventSource.onmessage = (e) => {
+                const logsDiv = document.getElementById('logs-content');
+                const entry = document.createElement('div');
+                entry.className = 'log-entry';
+                entry.textContent = e.data;
+                logsDiv.appendChild(entry);
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+                // cap at 200 entries
+                while (logsDiv.children.length > 200) logsDiv.removeChild(logsDiv.firstChild);
+            };
+            logEventSource.onerror = () => {
+                logEventSource.close();
+                logEventSource = null;
+                // fall back to polling
+                logsInterval = setInterval(loadLogs, 2000);
+            };
+        }
+
+        // ── Settings ──
         function saveSettings() {
             fetch('/save_settings', {
                 method: 'POST',
@@ -296,231 +853,187 @@ HTML_TEMPLATE = '''
                     url: document.getElementById('url').value,
                     headless: document.getElementById('headless').checked
                 })
-            }).then(() => {
-                alert('✅ Settings saved successfully!');
-                loadSettings();
+            }).then(() => { toast('Settings saved successfully', 'success'); loadSettings(); });
+        }
+
+        function loadSettings() {
+            fetch('/get_settings').then(r => r.json()).then(data => {
+                document.getElementById('username').value = data.username || '';
+                document.getElementById('password').value = data.password || '';
+                document.getElementById('url').value = data.url || 'https://tap.dor.ms.gov/';
+                document.getElementById('headless').checked = data.headless || false;
             });
         }
-        
-        function loadSettings() {
-            fetch('/get_settings')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('username').value = data.username || '';
-                    document.getElementById('password').value = data.password || '';
-                    document.getElementById('url').value = data.url || 'https://tap.dor.ms.gov/';
-                    document.getElementById('headless').checked = data.headless || false;
-                });
-        }
-        
+
+        // ── Orders ──
         function addItem() {
             const item_number = document.getElementById('item_number').value;
             const name = document.getElementById('item_name').value.trim();
             const size = document.getElementById('item_size').value.trim();
             const quantity = document.getElementById('quantity').value;
-            
-            if (!item_number || !quantity || !name || !size) {
-                alert('Please enter item number, name, size, and quantity');
-                return;
-            }
-            
+            if (!item_number || !quantity) { toast('Enter at least item number and quantity', 'error'); return; }
             fetch('/add_item', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    item_number: item_number,
-                    name: name,
-                    size: size,
-                    quantity: quantity
-                })
+                body: JSON.stringify({ item_number, name, size, quantity })
             }).then(() => {
-                document.getElementById('item_number').value = '';
-                document.getElementById('item_name').value = '';
-                document.getElementById('item_size').value = '';
-                document.getElementById('quantity').value = '';
+                ['item_number','item_name','item_size','quantity'].forEach(id => document.getElementById(id).value = '');
                 loadOrders();
+                toast('Item added to queue', 'success');
             });
         }
-        
+
         function deleteItem(index) {
-            if (confirm('Delete this item?')) {
-                fetch('/delete_item', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({index: index})
-                }).then(() => loadOrders());
-            }
+            fetch('/delete_item', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({index})
+            }).then(() => { loadOrders(); toast('Item removed', 'info'); });
         }
-        
+
         function clearCompleted() {
-            if (confirm('Clear all completed items?')) {
-                fetch('/clear_completed', {method: 'POST'})
-                    .then(() => loadOrders());
-            }
+            fetch('/clear_completed', {method: 'POST'}).then(() => { loadOrders(); toast('Completed items cleared', 'success'); });
         }
-        
-        function toggleBot() {
-            fetch('/toggle_bot', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => updateStatus(data));
-        }
-        
-        function updateStatus(data) {
-            const statusDiv = document.getElementById('status');
-            const toggleBtn = document.getElementById('bot-toggle');
-            
-            if (data.running) {
-                statusDiv.className = 'status running';
-                statusDiv.innerHTML = '✅ Status: Running';
-                toggleBtn.innerHTML = '⏹️ Stop Bot';
-                toggleBtn.className = 'danger';
-            } else {
-                statusDiv.className = 'status stopped';
-                statusDiv.innerHTML = '⭕ Status: Stopped';
-                toggleBtn.innerHTML = '▶️ Start Bot';
-                toggleBtn.className = 'success';
-            }
-            
-            loadStats();
-        }
-        
+
         function loadOrders() {
-            fetch('/get_orders')
-                .then(r => r.json())
-                .then(data => {
-                    const tbody = document.querySelector('#orders-table tbody');
-                    tbody.innerHTML = data.map((item, index) => `
-                        <tr>
-                            <td>${item.item_number}</td>
-                            <td>${item.name || ''}</td>
-                            <td>${item.size || ''}</td>
-                            <td>${item.units || ''}</td>
-                            <td>${item.quantity}</td>
-                            <td>${item.order_filled === 'yes' ? '✅ Completed' : '⏳ Pending'}</td>
-                            <td>
-                                <button class="danger" onclick="deleteItem(${index})">Delete</button>
-                            </td>
-                        </tr>
-                    `).join('');
-                    loadStats();
-                });
+            fetch('/get_orders').then(r => r.json()).then(data => {
+                const tbody = document.querySelector('#orders-table tbody');
+                tbody.innerHTML = data.map((item, i) => `
+                    <tr>
+                        <td style="font-weight:600">${item.item_number}</td>
+                        <td>${item.name || '<span style="color:var(--text-muted)">-</span>'}</td>
+                        <td>${item.size || '-'}</td>
+                        <td>${item.units || '-'}</td>
+                        <td>${item.quantity}</td>
+                        <td>${item.order_filled === 'yes'
+                            ? '<span class="badge badge-success"><span class="status-dot" style="background:var(--success)"></span> Done</span>'
+                            : '<span class="badge badge-warning"><span class="status-dot" style="background:var(--warning)"></span> Pending</span>'}</td>
+                        <td><button class="btn btn-danger btn-sm" onclick="deleteItem(${i})">Del</button></td>
+                    </tr>
+                `).join('');
+                loadStats();
+            });
         }
-        
+
         function sortOrders() {
-            fetch('/sort_orders', {method: 'POST'})
-                .then(r => r.json())
-                .then(() => loadOrders());
+            fetch('/sort_orders', {method: 'POST'}).then(() => { loadOrders(); toast('Sorted by item number', 'info'); });
         }
-        
-        function loadStats() {
-            fetch('/get_stats')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('stats').innerHTML = `
-                        <p>📦 Total Items: ${data.total}</p>
-                        <p>✅ Completed: ${data.completed}</p>
-                        <p>⏳ Remaining: ${data.remaining}</p>
-                    `;
-                });
-        }
-        
-        function loadLogs() {
-            fetch('/get_logs')
-                .then(r => r.json())
-                .then(data => {
-                    const logsDiv = document.getElementById('logs-content');
-                    logsDiv.innerHTML = data.logs.map(log => 
-                        `<div class="log-entry">${log}</div>`
-                    ).join('');
-                    logsDiv.scrollTop = logsDiv.scrollHeight;
-                });
-        }
-        
-        function clearLogs() {
-            if (confirm('Clear all logs?')) {
-                fetch('/clear_logs', {method: 'POST'})
-                    .then(() => loadLogs());
-            }
-        }
-        
-        function downloadCSV() {
-            window.location.href = '/download_csv';
-        }
-        
+
+        function downloadCSV() { window.location.href = '/download_csv'; }
+
         function uploadCSV(event) {
             const file = event.target.files[0];
-            const formData = new FormData();
-            formData.append('file', file);
-            
-            fetch('/upload_csv', {
-                method: 'POST',
-                body: formData
-            }).then(() => {
-                alert('CSV uploaded successfully!');
-                loadOrders();
+            const fd = new FormData();
+            fd.append('file', file);
+            fetch('/upload_csv', { method: 'POST', body: fd }).then(() => { toast('CSV uploaded', 'success'); loadOrders(); });
+            event.target.value = '';
+        }
+
+        // ── Stats ──
+        function loadStats() {
+            fetch('/get_stats').then(r => r.json()).then(data => {
+                document.getElementById('stat-total').textContent = data.total;
+                document.getElementById('stat-completed').textContent = data.completed;
+                document.getElementById('stat-remaining').textContent = data.remaining;
+                const pct = data.total > 0 ? Math.round((data.completed / data.total) * 100) : 0;
+                document.getElementById('stat-percent').textContent = pct + '%';
+                document.getElementById('progress-fill').style.width = pct + '%';
             });
         }
-        
+
+        // ── Bot control ──
+        function toggleBot() {
+            fetch('/toggle_bot', {method: 'POST'}).then(r => r.json()).then(data => {
+                updateStatus(data);
+                toast(data.running ? 'Bot started' : 'Bot stopped', data.running ? 'success' : 'info');
+            });
+        }
+
+        function updateStatus(data) {
+            const powerBtn = document.getElementById('power-btn');
+            const controlStatus = document.getElementById('control-status');
+            const headerPill = document.getElementById('header-status');
+            const headerDot = document.getElementById('header-dot');
+            const headerText = document.getElementById('header-status-text');
+
+            if (data.running) {
+                powerBtn.className = 'power-btn running';
+                powerBtn.innerHTML = '&#9724;';
+                controlStatus.textContent = 'Bot is running...';
+                controlStatus.style.color = 'var(--success)';
+                headerPill.className = 'status-pill running';
+                headerDot.className = 'status-dot running';
+                headerText.textContent = 'Running';
+            } else {
+                powerBtn.className = 'power-btn';
+                powerBtn.innerHTML = '&#9654;';
+                controlStatus.textContent = 'Press to Start';
+                controlStatus.style.color = 'var(--text-secondary)';
+                headerPill.className = 'status-pill stopped';
+                headerDot.className = 'status-dot stopped';
+                headerText.textContent = 'Stopped';
+            }
+            loadStats();
+        }
+
+        // ── Logs ──
+        function loadLogs() {
+            fetch('/get_logs').then(r => r.json()).then(data => {
+                const logsDiv = document.getElementById('logs-content');
+                logsDiv.innerHTML = data.logs.map(log => `<div class="log-entry">${log}</div>`).join('');
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+            });
+        }
+
+        function clearLogs() {
+            fetch('/clear_logs', {method: 'POST'}).then(() => { loadLogs(); toast('Logs cleared', 'info'); });
+        }
+
+        // ── Order Data ──
         let orderDataResults = [];
         let orderDataSortKey = 'order_date';
         let orderDataSortAsc = false;
-        
+
         function loadOrderFiles() {
-            fetch('/get_order_files')
-                .then(r => r.json())
-                .then(data => {
-                    const container = document.getElementById('order-files-list');
-                    if (data.files.length === 0) {
-                        container.innerHTML = '<p style="color:#999;">No .ods files found in Order Data folder.</p>';
-                        return;
-                    }
-                    container.innerHTML = data.files.map(f => `
-                        <label style="display:block; margin:4px 0; cursor:pointer;">
-                            <input type="checkbox" class="order-file-cb" value="${f.filename}" checked>
-                            ${f.display_name} <span style="color:#888; font-size:12px;">(${f.filename})</span>
-                        </label>
-                    `).join('');
-                    document.getElementById('select-all-files').checked = true;
-                });
+            fetch('/get_order_files').then(r => r.json()).then(data => {
+                const container = document.getElementById('order-files-list');
+                if (data.files.length === 0) {
+                    container.innerHTML = '<p style="color:var(--text-muted);">No .ods files found in Order Data folder.</p>';
+                    return;
+                }
+                container.innerHTML = data.files.map(f => `
+                    <label><input type="checkbox" class="order-file-cb" value="${f.filename}" checked>
+                    ${f.display_name} <span style="color:var(--text-muted); font-size:11px;">(${f.filename})</span></label>
+                `).join('');
+                document.getElementById('select-all-files').checked = true;
+            });
         }
-        
+
         function toggleAllFiles(cb) {
             document.querySelectorAll('.order-file-cb').forEach(c => c.checked = cb.checked);
         }
-        
+
         function searchOrderData() {
             const selected = Array.from(document.querySelectorAll('.order-file-cb:checked')).map(c => c.value);
             const includeSpecial = document.getElementById('include-special-orders').checked;
             const includeCurrentPrices = document.getElementById('include-current-prices').checked;
             const includeSalesData = document.getElementById('include-sales-data').checked;
-            if (selected.length === 0 && !includeSpecial) {
-                alert('Please select at least one file or include special orders.');
-                return;
-            }
-            const statusDiv = document.getElementById('order-data-status');
-            statusDiv.textContent = 'Searching...';
-            
+            if (selected.length === 0 && !includeSpecial) { toast('Select at least one file', 'error'); return; }
+            document.getElementById('order-data-status').textContent = 'Searching...';
             fetch('/search_order_data', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({files: selected, include_special: includeSpecial, include_current_prices: includeCurrentPrices, include_sales_data: includeSalesData})
-            })
-            .then(r => r.json())
-            .then(data => {
+            }).then(r => r.json()).then(data => {
                 orderDataResults = data.items;
-                orderDataSortKey = 'order_date';
-                orderDataSortAsc = false;
-                const uniqueItems = new Set(data.items.map(i => i.item_num)).size;
+                const unique = new Set(data.items.map(i => i.item_num)).size;
                 let src = selected.length + ' file(s)';
-                if (includeSpecial) src += ' + specialorder.csv';
-                statusDiv.textContent = `Found ${data.items.length} rows (${uniqueItems} unique items) across ${src}.`;
+                if (includeSpecial) src += ' + special orders';
+                document.getElementById('order-data-status').textContent = `Found ${data.items.length} rows (${unique} unique items) across ${src}.`;
                 renderOrderResults();
-            })
-            .catch(err => {
-                statusDiv.textContent = 'Error: ' + err;
-            });
+            }).catch(err => { document.getElementById('order-data-status').textContent = 'Error: ' + err; });
         }
-        
+
         function renderOrderResults() {
             const table = document.getElementById('order-data-table');
             const raw = document.getElementById('item-search-filter').value.trim();
@@ -533,11 +1046,7 @@ HTML_TEMPLATE = '''
                     items = items.filter(i => numSet.has(i.item_num));
                 } else {
                     items = items.filter(i =>
-                        parts.some(p =>
-                            i.item_num.toLowerCase().includes(p) ||
-                            i.name.toLowerCase().includes(p) ||
-                            i.category.toLowerCase().includes(p)
-                        )
+                        parts.some(p => i.item_num.toLowerCase().includes(p) || i.name.toLowerCase().includes(p) || (i.category||'').toLowerCase().includes(p))
                     );
                 }
             }
@@ -545,140 +1054,124 @@ HTML_TEMPLATE = '''
             tbody.innerHTML = items.map(item => {
                 const isSO = item.source_file.startsWith('SO#');
                 const hasSale = item.spa_date && item.spa_date !== '';
-                let rowStyle = '';
-                if (hasSale) rowStyle = 'background:#d4edda; color:#155724;';
-                else if (isSO) rowStyle = 'background:#f8d7da; color:#721c24;';
+                let rowClass = '';
+                if (hasSale) rowClass = 'row-sale';
+                else if (isSO) rowClass = 'row-special';
                 const sold = parseFloat(item.units_sold) || 0;
                 const onHand = parseFloat(item.qty_on_hand) || 0;
-                const avg3mo = sold * 3 / 4;
-                const lowStock = sold > 0 && onHand > 0 && avg3mo > onHand;
-                const qohStyle = lowStock ? 'background:#ff9800; color:#fff; font-weight:bold; padding:2px 6px; border-radius:3px;' : '';
+                const lowStock = sold > 0 && onHand > 0 && (sold * 3 / 4) > onHand;
                 return `
-                <tr style="${rowStyle}">
-                    <td>${item.item_num}</td>
+                <tr class="${rowClass}">
+                    <td style="font-weight:600">${item.item_num}</td>
                     <td>${item.size || ''}</td>
                     <td>${item.units || ''}</td>
                     <td>${item.available || ''}</td>
                     <td>${item.qty_requested || ''}</td>
                     <td>${item.units_sold || ''}</td>
-                    <td><span style="${qohStyle}">${item.qty_on_hand || ''}</span></td>
+                    <td>${lowStock ? '<span class="low-stock">' + (item.qty_on_hand||'') + '</span>' : (item.qty_on_hand || '')}</td>
                     <td>${item.name}</td>
-                    <td>${item.source_file}</td>
+                    <td><span style="font-size:12px; color:var(--text-muted)">${item.source_file}</span></td>
                     <td>${item.spa_date || ''}</td>
                     <td>${item.spa_price || ''}</td>
                     <td>${item.case_cost || ''}</td>
                     <td>${item.spa_discount || ''}</td>
-                    <td><button class="success" style="padding:4px 10px; font-size:12px;" onclick="addToBot('${item.item_num}', '${(item.name||'').replace(/'/g,"\\'")}', '${(item.size||'').replace(/'/g,"\\'")}', '${item.units||''}')">+ Bot</button></td>
+                    <td><button class="btn btn-primary btn-sm" onclick="addToBot('${item.item_num}', '${(item.name||'').replace(/'/g,"\\'")}', '${(item.size||'').replace(/'/g,"\\'")}', '${item.units||''}')">+ Bot</button></td>
                 </tr>`;
             }).join('');
             table.style.display = items.length > 0 ? 'table' : 'none';
         }
-        
-        function filterOrderResults() {
-            renderOrderResults();
-        }
-        
+
+        function filterOrderResults() { renderOrderResults(); }
+
         function sortOrderResults(key) {
-            if (orderDataSortKey === key) {
-                orderDataSortAsc = !orderDataSortAsc;
-            } else {
-                orderDataSortKey = key;
-                orderDataSortAsc = true;
-            }
+            if (orderDataSortKey === key) orderDataSortAsc = !orderDataSortAsc;
+            else { orderDataSortKey = key; orderDataSortAsc = true; }
             orderDataResults.sort((a, b) => {
-                let va, vb;
-                if (key === 'spa_date') {
-                    va = a.spa_sort_date || ''; vb = b.spa_sort_date || '';
-                } else {
-                    va = a[key] || ''; vb = b[key] || '';
-                }
+                const va = (key === 'spa_date' ? a.spa_sort_date : a[key]) || '';
+                const vb = (key === 'spa_date' ? b.spa_sort_date : b[key]) || '';
                 if (va < vb) return orderDataSortAsc ? -1 : 1;
                 if (va > vb) return orderDataSortAsc ? 1 : -1;
                 return 0;
             });
             renderOrderResults();
         }
-        
+
         function addToBot(itemNum, name, size, units) {
             const qty = prompt('Enter quantity for item ' + itemNum + ':');
             if (qty === null || qty.trim() === '') return;
-            if (isNaN(qty) || parseInt(qty) <= 0) {
-                alert('Please enter a valid quantity.');
-                return;
-            }
+            if (isNaN(qty) || parseInt(qty) <= 0) { toast('Enter a valid quantity', 'error'); return; }
             fetch('/add_item', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({item_number: itemNum, name: name || '', size: size || '', units: units || '', quantity: qty.trim()})
-            }).then(r => r.json()).then(() => {
-                alert('Item ' + itemNum + ' (qty: ' + qty.trim() + ') added to bot orders.');
+                body: JSON.stringify({item_number: itemNum, name: name||'', size: size||'', units: units||'', quantity: qty.trim()})
+            }).then(() => toast(`Item ${itemNum} (qty: ${qty.trim()}) added to queue`, 'success'));
+        }
+
+        // ── Special Orders ──
+        function loadSpecialOrders() {
+            fetch('/get_special_orders').then(r => r.json()).then(data => {
+                document.querySelector('#special-orders-table tbody').innerHTML = data.map((item, i) => `
+                    <tr>
+                        <td style="font-weight:600">${item.item_number}</td>
+                        <td>${item.quantity}</td>
+                        <td>${item.name}</td>
+                        <td>${item.order_number}</td>
+                        <td>${item.order_date}</td>
+                        <td><button class="btn btn-danger btn-sm" onclick="deleteSpecialOrder(${i})">Del</button></td>
+                    </tr>
+                `).join('');
             });
         }
-        
-        function loadSpecialOrders() {
-            fetch('/get_special_orders')
-                .then(r => r.json())
-                .then(data => {
-                    const tbody = document.querySelector('#special-orders-table tbody');
-                    tbody.innerHTML = data.map((item, index) => `
-                        <tr>
-                            <td>${item.item_number}</td>
-                            <td>${item.quantity}</td>
-                            <td>${item.name}</td>
-                            <td>${item.order_number}</td>
-                            <td>${item.order_date}</td>
-                            <td>
-                                <button class="danger" onclick="deleteSpecialOrder(${index})">Delete</button>
-                            </td>
-                        </tr>
-                    `).join('');
-                });
-        }
-        
+
         function addSpecialOrder() {
             const item_number = document.getElementById('so-item-number').value;
-            const quantity = document.getElementById('so-quantity').value;
-            const name = document.getElementById('so-name').value;
-            const order_number = document.getElementById('so-order-number').value;
-            const order_date = document.getElementById('so-order-date').value;
-            
-            if (!item_number) {
-                alert('Please enter at least an item number.');
-                return;
-            }
-            
+            if (!item_number) { toast('Enter at least an item number', 'error'); return; }
             fetch('/add_special_order', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({item_number, quantity, name, order_number, order_date})
+                body: JSON.stringify({
+                    item_number,
+                    quantity: document.getElementById('so-quantity').value,
+                    name: document.getElementById('so-name').value,
+                    order_number: document.getElementById('so-order-number').value,
+                    order_date: document.getElementById('so-order-date').value
+                })
             }).then(() => {
-                document.getElementById('so-item-number').value = '';
-                document.getElementById('so-quantity').value = '';
-                document.getElementById('so-name').value = '';
-                document.getElementById('so-order-number').value = '';
-                document.getElementById('so-order-date').value = '';
+                ['so-item-number','so-quantity','so-name','so-order-number','so-order-date'].forEach(id => document.getElementById(id).value = '');
                 loadSpecialOrders();
+                toast('Special order added', 'success');
             });
         }
-        
+
         function deleteSpecialOrder(index) {
-            if (confirm('Delete this special order?')) {
-                fetch('/delete_special_order', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({index: index})
-                }).then(() => loadSpecialOrders());
-            }
+            fetch('/delete_special_order', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({index})
+            }).then(() => { loadSpecialOrders(); toast('Special order removed', 'info'); });
         }
-        
-        // Check bot status periodically
+
+        // ── Periodic status check ──
         setInterval(() => {
-            fetch('/get_status')
-                .then(r => r.json())
-                .then(data => updateStatus(data));
+            fetch('/get_status').then(r => r.json()).then(data => updateStatus(data));
         }, 3000);
-        
-        // Load initial data
+
+        // ── Theme toggle ──
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme') || 'dark';
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+            document.getElementById('theme-toggle').innerHTML = next === 'dark' ? '&#9790;' : '&#9728;';
+        }
+        (function initTheme() {
+            const saved = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', saved);
+            document.getElementById('theme-toggle').innerHTML = saved === 'dark' ? '&#9790;' : '&#9728;';
+        })();
+
+        // ── Init ──
         loadSettings();
         loadOrders();
     </script>
@@ -810,7 +1303,26 @@ def get_status():
 @app.route('/get_logs')
 def get_logs():
     global logs
-    return jsonify({'logs': logs[-50:]})  # Return last 50 logs
+    return jsonify({'logs': logs[-50:]})
+
+@app.route('/stream_logs')
+def stream_logs():
+    """SSE endpoint for real-time log streaming."""
+    from flask import Response
+    import time as _time
+
+    def generate():
+        last_count = len(logs)
+        while True:
+            current_count = len(logs)
+            if current_count > last_count:
+                for entry in logs[last_count:current_count]:
+                    yield f"data: {entry}\n\n"
+                last_count = current_count
+            _time.sleep(0.5)
+
+    return Response(generate(), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 @app.route('/clear_logs', methods=['POST'])
 def clear_logs():
