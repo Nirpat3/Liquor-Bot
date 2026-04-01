@@ -9,6 +9,8 @@ import subprocess
 import os
 from pathlib import Path
 
+VERSION = "1.1.0"
+
 def check_requirements():
     """Check if required packages are installed"""
     required = ['playwright', 'dotenv', 'flask']
@@ -30,9 +32,28 @@ def install_requirements():
     print("Installing browser...")
     subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
 
+def clear_cache_if_updated():
+    """Clear __pycache__ automatically when code version changes (e.g. after git pull)."""
+    import shutil
+    base_dir = Path(__file__).parent
+    version_file = base_dir / '.version'
+    cache_dir = base_dir / '__pycache__'
+
+    cached_version = None
+    if version_file.exists():
+        cached_version = version_file.read_text().strip()
+
+    if cached_version != VERSION:
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+            print(f"Cleared __pycache__ (version changed: {cached_version} -> {VERSION})")
+        version_file.write_text(VERSION)
+
 def main():
     print("Mississippi DOR Order Bot")
     print("-" * 30)
+
+    clear_cache_if_updated()
 
     missing = check_requirements()
     if missing:
