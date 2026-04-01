@@ -7,7 +7,27 @@ from typing import Optional
 from pathlib import Path
 import csv
 import time
-import fcntl
+import sys
+
+if sys.platform == 'win32':
+    import msvcrt
+    def _lock_shared(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    def _lock_exclusive(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    def _unlock(f):
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+else:
+    import fcntl
+    def _lock_shared(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+    def _lock_exclusive(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    def _unlock(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 # set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,7 +44,7 @@ def read_csv_file(filename):
     items = []
     try:
         with open(filename, 'r', newline='') as file:
-            fcntl.flock(file.fileno(), fcntl.LOCK_SH)
+            _lock_shared(file)
             try:
                 reader = csv.DictReader(file)
                 for row in reader:
@@ -37,7 +57,7 @@ def read_csv_file(filename):
                         'order_filled': row.get('order_filled', '').strip()
                     })
             finally:
-                fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+                _unlock(file)
         return items
     except Exception as e:
         logger.error(f"Error reading CSV file: {e}")
@@ -48,14 +68,14 @@ def update_csv_file(filename, items):
     """Update CSV file with file locking to prevent race conditions."""
     try:
         with open(filename, 'w', newline='') as file:
-            fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+            _lock_exclusive(file)
             try:
                 fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
                 writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
                 writer.writeheader()
                 writer.writerows(items)
             finally:
-                fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+                _unlock(file)
         logger.info("CSV file updated")
     except Exception as e:
         logger.error(f"Error updating CSV file: {e}")

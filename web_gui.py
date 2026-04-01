@@ -3,7 +3,26 @@ from flask import Flask, render_template_string, request, jsonify, send_file
 import threading
 import asyncio
 import csv
-import fcntl
+import sys
+if sys.platform == 'win32':
+    import msvcrt
+    def _lock_shared(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    def _lock_exclusive(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    def _unlock(f):
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+else:
+    import fcntl
+    def _lock_shared(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+    def _lock_exclusive(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    def _unlock(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 import json
 from pathlib import Path
 import logging
@@ -11,7 +30,6 @@ import os
 import re
 from datetime import datetime
 from dotenv import load_dotenv
-import sys
 from odf.opendocument import load as load_ods
 from odf.table import Table, TableRow, TableCell
 from odf.text import P
@@ -29,24 +47,24 @@ def _read_csv_locked():
     orders = []
     if Path('orders.csv').exists():
         with open('orders.csv', 'r', newline='') as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            _lock_shared(f)
             try:
                 orders = list(csv.DictReader(f))
             finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                _unlock(f)
     return orders
 
 
 def _write_csv_locked(orders):
     """Write orders.csv with exclusive file lock."""
     with open('orders.csv', 'w', newline='') as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        _lock_exclusive(f)
         try:
             writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(orders)
         finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            _unlock(f)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
