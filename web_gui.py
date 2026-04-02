@@ -3,8 +3,30 @@ from flask import Flask, render_template_string, request, jsonify, send_file
 import threading
 import asyncio
 import csv
-import fcntl
+import sys
+if sys.platform == 'win32':
+    import msvcrt
+    def _lock_shared(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    def _lock_exclusive(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    def _unlock(f):
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+else:
+    import fcntl
+    def _lock_shared(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+    def _lock_exclusive(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    def _unlock(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 import json
+import time
+import random
+import io
 from pathlib import Path
 import logging
 import os
@@ -21,6 +43,16 @@ app = Flask(__name__)
 bot_thread = None
 bot_running = False
 stop_event = threading.Event()
+current_bot = None
+
+# Cooldown state
+cooldown_active = False
+cooldown_end = 0
+skip_cooldown_flag = False
+cooldown_enabled = True
+work_interval = 15  # minutes
+rest_min = 2  # minutes
+rest_max = 3  # minutes
 
 CSV_FIELDNAMES = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
 
@@ -30,24 +62,24 @@ def _read_csv_locked():
     orders = []
     if Path('orders.csv').exists():
         with open('orders.csv', 'r', newline='') as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            _lock_shared(f)
             try:
                 orders = list(csv.DictReader(f))
             finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                _unlock(f)
     return orders
 
 
 def _write_csv_locked(orders):
     """Write orders.csv with exclusive file lock."""
     with open('orders.csv', 'w', newline='') as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        _lock_exclusive(f)
         try:
             writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES, extrasaction='ignore')
             writer.writeheader()
             writer.writerows(orders)
         finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            _unlock(f)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -527,6 +559,10 @@ HTML_TEMPLATE = '''
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+        /* Time trace row coloring */
+        .trace-added { color: var(--success); font-weight: 600; }
+        .trace-skip { color: var(--text-muted); }
+        .trace-failed { color: var(--danger); font-weight: 600; }
         /* Hidden file input */
         .hidden { display: none; }
     </style>
@@ -557,6 +593,7 @@ HTML_TEMPLATE = '''
             <div class="tab" onclick="showTab('orderdata', this)">Order Data</div>
             <div class="tab" onclick="showTab('specialorders', this)">Special Orders</div>
             <div class="tab" onclick="showTab('salesintel', this)">Sales Intelligence</div>
+            <div class="tab" onclick="showTab('timetrace', this)">Time Trace</div>
         </div>
 
         <!-- Control Tab -->
@@ -588,6 +625,8 @@ HTML_TEMPLATE = '''
                 <div class="control-center">
                     <button class="power-btn" id="power-btn" onclick="toggleBot()" title="Start/Stop Bot">&#9654;</button>
                     <div id="control-status" style="font-size:18px; font-weight:600; color:var(--text-secondary)">Press to Start</div>
+                    <button class="btn btn-ghost btn-sm" id="skip-cooldown-btn" onclick="skipCooldown()" style="display:none; margin-top:12px;">Skip Cooldown</button>
+                    <div id="cooldown-status" style="font-size:14px; color:var(--warning); margin-top:8px; display:none;"></div>
                 </div>
             </div>
         </div>
@@ -625,6 +664,7 @@ HTML_TEMPLATE = '''
                         <button class="btn btn-ghost btn-sm" onclick="downloadCSV()">Export</button>
                         <button class="btn btn-ghost btn-sm" onclick="document.getElementById('file-upload').click()">Import</button>
                         <button class="btn btn-danger btn-sm" onclick="clearCompleted()">Clear Done</button>
+                        <button class="btn btn-danger btn-sm" onclick="clearAllOrders()">Clear All</button>
                         <input type="file" id="file-upload" class="hidden" accept=".csv" onchange="uploadCSV(event)">
                     </div>
                 </div>
@@ -693,6 +733,29 @@ HTML_TEMPLATE = '''
             </div>
             <div style="margin-top:12px;">
                 <button class="btn btn-primary" onclick="saveSettings()">Save All Settings</button>
+            </div>
+            <div class="card" style="margin-top:16px;">
+                <div class="card-title">Cooldown (Anti-Detection)</div>
+                <div class="input-row">
+                    <label>Work Interval</label>
+                    <input type="number" id="work-interval" value="15" style="width:80px;" min="1">
+                    <span style="font-size:13px; color:var(--text-muted);">minutes</span>
+                </div>
+                <div class="input-row">
+                    <label>Rest Min</label>
+                    <input type="number" id="rest-min" value="2" style="width:80px;" min="1">
+                    <span style="font-size:13px; color:var(--text-muted);">minutes</span>
+                </div>
+                <div class="input-row">
+                    <label>Rest Max</label>
+                    <input type="number" id="rest-max" value="3" style="width:80px;" min="1">
+                    <span style="font-size:13px; color:var(--text-muted);">minutes</span>
+                </div>
+                <div class="checkbox-row">
+                    <input type="checkbox" id="cooldown-enabled" checked>
+                    <span>Enable cooldown breaks</span>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="saveCooldownSettings()">Save Cooldown Settings</button>
             </div>
             <div class="instructions">
                 <div class="card-title">Getting Started</div>
@@ -865,10 +928,39 @@ HTML_TEMPLATE = '''
                 </div>
             </div>
         </div>
+
+        <div id="timetrace" class="tab-content">
+            <div class="card">
+                <div class="card-title">Time Trace</div>
+                <div id="trace-summary" style="margin-bottom:12px; font-size:14px; color:var(--text-secondary);">Loading...</div>
+                <div class="btn-group" style="margin-bottom:12px;">
+                    <button class="btn btn-danger btn-sm" onclick="clearTraces()">Clear Traces</button>
+                    <button class="btn btn-ghost btn-sm" onclick="exportTraces()">Export CSV</button>
+                </div>
+            </div>
+            <div class="card">
+            <table id="trace-table">
+                <thead>
+                    <tr>
+                        <th>Item #</th>
+                        <th>Result</th>
+                        <th>Total (ms)</th>
+                        <th>Type (ms)</th>
+                        <th>Search (ms)</th>
+                        <th>Qty Check (ms)</th>
+                        <th>Add (ms)</th>
+                        <th>Enter Qty (ms)</th>
+                        <th>Clear (ms)</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+            </div>
+        </div>
     </div>
 
     <script>
-        let logsInterval, ordersInterval, logEventSource;
+        let logsInterval, ordersInterval, logEventSource, traceInterval;
 
         // ── Toast notifications ──
         function toast(message, type = 'info') {
@@ -889,6 +981,7 @@ HTML_TEMPLATE = '''
 
             clearInterval(logsInterval);
             clearInterval(ordersInterval);
+            clearInterval(traceInterval);
             if (logEventSource) { logEventSource.close(); logEventSource = null; }
 
             if (tabName === 'logs') { loadLogs(); startLogStream(); }
@@ -896,6 +989,7 @@ HTML_TEMPLATE = '''
             if (tabName === 'orderdata') loadOrderFiles();
             if (tabName === 'specialorders') loadSpecialOrders();
             if (tabName === 'salesintel' && !salesLoaded) loadSalesData();
+            if (tabName === 'timetrace') { loadTraces(); traceInterval = setInterval(loadTraces, 1000); }
         }
 
         // ── SSE log streaming ──
@@ -1002,6 +1096,12 @@ HTML_TEMPLATE = '''
             fetch('/clear_completed', {method: 'POST'}).then(() => { loadOrders(); toast('Completed items cleared', 'success'); });
         }
 
+        function clearAllOrders() {
+            if (confirm('Clear ALL orders? This cannot be undone.')) {
+                fetch('/clear_all_orders', {method: 'POST'}).then(() => { loadOrders(); toast('All orders cleared', 'info'); });
+            }
+        }
+
         function loadOrders() {
             fetch('/get_orders').then(r => r.json()).then(data => {
                 const tbody = document.querySelector('#orders-table tbody');
@@ -1014,6 +1114,8 @@ HTML_TEMPLATE = '''
                         <td>${item.quantity}</td>
                         <td>${item.order_filled === 'yes'
                             ? '<span class="badge badge-success"><span class="status-dot" style="background:var(--success)"></span> Done</span>'
+                            : item.order_filled === 'backorder'
+                            ? '<span class="badge badge-danger"><span class="status-dot" style="background:var(--danger)"></span> Backorder</span>'
                             : '<span class="badge badge-warning"><span class="status-dot" style="background:var(--warning)"></span> Pending</span>'}</td>
                         <td><button class="btn btn-danger btn-sm" onclick="deleteItem(${i})">Del</button></td>
                     </tr>
@@ -1062,12 +1164,30 @@ HTML_TEMPLATE = '''
             const headerPill = document.getElementById('header-status');
             const headerDot = document.getElementById('header-dot');
             const headerText = document.getElementById('header-status-text');
+            const skipBtn = document.getElementById('skip-cooldown-btn');
+            const cooldownDiv = document.getElementById('cooldown-status');
 
-            if (data.running) {
+            if (data.cooldown) {
+                const remaining = Math.ceil(data.cooldown_remaining || 0);
+                const mins = Math.floor(remaining / 60);
+                const secs = remaining % 60;
+                powerBtn.className = 'power-btn running';
+                powerBtn.innerHTML = '&#9724;';
+                controlStatus.textContent = 'Cooldown active...';
+                controlStatus.style.color = 'var(--warning)';
+                cooldownDiv.style.display = 'block';
+                cooldownDiv.textContent = mins + 'm ' + secs + 's remaining';
+                skipBtn.style.display = 'inline-flex';
+                headerPill.className = 'status-pill running';
+                headerDot.className = 'status-dot running';
+                headerText.textContent = 'Cooldown';
+            } else if (data.running) {
                 powerBtn.className = 'power-btn running';
                 powerBtn.innerHTML = '&#9724;';
                 controlStatus.textContent = 'Bot is running...';
                 controlStatus.style.color = 'var(--success)';
+                cooldownDiv.style.display = 'none';
+                skipBtn.style.display = 'none';
                 headerPill.className = 'status-pill running';
                 headerDot.className = 'status-dot running';
                 headerText.textContent = 'Running';
@@ -1076,6 +1196,8 @@ HTML_TEMPLATE = '''
                 powerBtn.innerHTML = '&#9654;';
                 controlStatus.textContent = 'Press to Start';
                 controlStatus.style.color = 'var(--text-secondary)';
+                cooldownDiv.style.display = 'none';
+                skipBtn.style.display = 'none';
                 headerPill.className = 'status-pill stopped';
                 headerDot.className = 'status-dot stopped';
                 headerText.textContent = 'Stopped';
@@ -1367,6 +1489,80 @@ HTML_TEMPLATE = '''
         }
 
         // ── Periodic status check ──
+        
+        function loadTraces() {
+            fetch('/get_traces')
+                .then(r => r.json())
+                .then(data => {
+                    const traces = data.traces || [];
+                    const tbody = document.querySelector('#trace-table tbody');
+                    let added = 0, skipped = 0, failed = 0;
+                    let times = [];
+                    tbody.innerHTML = traces.map((t, i) => {
+                        const result = (t.result || '').toUpperCase();
+                        let cls = 'trace-skip';
+                        if (result === 'ADDED') { cls = 'trace-added'; added++; }
+                        else if (result === 'FAILED') { cls = 'trace-failed'; failed++; }
+                        else { skipped++; }
+                        const total = t.total_ms || 0;
+                        if (total > 0) times.push(total);
+                        return '<tr class="' + cls + '">' +
+                            '<td>' + (t.item_number || '') + '</td>' +
+                            '<td>' + result + '</td>' +
+                            '<td>' + total + '</td>' +
+                            '<td>' + (t.type_ms || '') + '</td>' +
+                            '<td>' + (t.search_ms || '') + '</td>' +
+                            '<td>' + (t.qty_check_ms || '') + '</td>' +
+                            '<td>' + (t.add_ms || '') + '</td>' +
+                            '<td>' + (t.enter_qty_ms || '') + '</td>' +
+                            '<td>' + (t.clear_ms || '') + '</td>' +
+                            '</tr>';
+                    }).join('');
+                    const avg = times.length ? Math.round(times.reduce((a,b) => a+b, 0) / times.length) : 0;
+                    const fastest = times.length ? Math.min(...times) : 0;
+                    const slowest = times.length ? Math.max(...times) : 0;
+                    document.getElementById('trace-summary').innerHTML =
+                        '<b>Items checked:</b> ' + traces.length +
+                        ' | <b>Added:</b> ' + added +
+                        ' | <b>Skipped:</b> ' + skipped +
+                        ' | <b>Failed:</b> ' + failed +
+                        ' | <b>Avg:</b> ' + avg + 'ms' +
+                        ' | <b>Fastest:</b> ' + fastest + 'ms' +
+                        ' | <b>Slowest:</b> ' + slowest + 'ms';
+                });
+        }
+
+        function clearTraces() {
+            if (confirm('Clear all traces?')) {
+                fetch('/clear_traces', {method: 'POST'})
+                    .then(() => loadTraces());
+            }
+        }
+
+        function exportTraces() {
+            window.location.href = '/export_traces';
+        }
+
+        function skipCooldown() {
+            fetch('/skip_cooldown', {method: 'POST'});
+        }
+
+        function saveCooldownSettings() {
+            fetch('/save_cooldown_settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    work_interval: parseInt(document.getElementById('work-interval').value) || 15,
+                    rest_min: parseInt(document.getElementById('rest-min').value) || 2,
+                    rest_max: parseInt(document.getElementById('rest-max').value) || 3,
+                    cooldown_enabled: document.getElementById('cooldown-enabled').checked
+                })
+            }).then(() => {
+                alert('Cooldown settings saved!');
+            });
+        }
+
+        // Check bot status periodically
         setInterval(() => {
             fetch('/get_status').then(r => r.json()).then(data => updateStatus(data));
         }, 3000);
@@ -1544,7 +1740,11 @@ def toggle_bot():
 
 @app.route('/get_status')
 def get_status():
-    return jsonify({'running': bot_running})
+    return jsonify({
+        'running': bot_running,
+        'cooldown': cooldown_active,
+        'cooldown_remaining': max(0, cooldown_end - time.time())
+    })
 
 @app.route('/get_logs')
 def get_logs():
@@ -1589,6 +1789,59 @@ def upload_csv():
         file.save('orders.csv')
         return jsonify({'success': True})
     return jsonify({'error': 'Invalid file'}), 400
+
+@app.route('/clear_all_orders', methods=['POST'])
+def clear_all_orders():
+    _write_csv_locked([])
+    return jsonify({'success': True})
+
+@app.route('/get_traces')
+def get_traces():
+    traces = []
+    if current_bot and hasattr(current_bot, 'trace_log'):
+        traces = current_bot.trace_log
+    return jsonify({'traces': traces})
+
+@app.route('/clear_traces', methods=['POST'])
+def clear_traces():
+    if current_bot and hasattr(current_bot, 'trace_log'):
+        current_bot.trace_log.clear()
+    return jsonify({'success': True})
+
+@app.route('/export_traces')
+def export_traces():
+    traces = []
+    if current_bot and hasattr(current_bot, 'trace_log'):
+        traces = current_bot.trace_log
+    output = io.StringIO()
+    fields = ['item_number', 'result', 'total_ms', 'type_ms', 'search_ms', 'qty_check_ms', 'add_ms', 'enter_qty_ms', 'clear_ms']
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction='ignore')
+    writer.writeheader()
+    for t in traces:
+        writer.writerow(t)
+    output.seek(0)
+    return send_file(
+        io.BytesIO(output.getvalue().encode('utf-8')),
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name='traces.csv'
+    )
+
+@app.route('/skip_cooldown', methods=['POST'])
+def skip_cooldown_route():
+    global skip_cooldown_flag
+    skip_cooldown_flag = True
+    return jsonify({'success': True})
+
+@app.route('/save_cooldown_settings', methods=['POST'])
+def save_cooldown_settings():
+    global cooldown_enabled, work_interval, rest_min, rest_max
+    data = request.json
+    work_interval = data.get('work_interval', 15)
+    rest_min = data.get('rest_min', 2)
+    rest_max = data.get('rest_max', 3)
+    cooldown_enabled = data.get('cooldown_enabled', True)
+    return jsonify({'success': True})
 
 ORDER_DATA_DIR = Path('Order Data')
 
@@ -2414,7 +2667,7 @@ ITEM: #<number> <name> QTY: <quantity>"""
 
 def run_bot_thread():
     """Run the bot in a separate thread, reusing bot_script.py logic."""
-    global bot_running
+    global bot_running, current_bot, cooldown_active, cooldown_end, skip_cooldown_flag
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -2422,10 +2675,11 @@ def run_bot_thread():
         from bot_script import WebAutomationBot, read_csv_file, update_csv_file
 
         async def run_bot():
-            global bot_running
+            global bot_running, current_bot, cooldown_active, cooldown_end, skip_cooldown_flag
             load_dotenv()
             headless = os.getenv('HEADLESS', 'False').lower() == 'true'
             bot = WebAutomationBot(headless=headless)
+            current_bot = bot
 
             if not Path('orders.csv').exists():
                 _write_csv_locked([])
@@ -2437,7 +2691,24 @@ def run_bot_thread():
 
                 consecutive_errors = 0
                 on_item_entry = False
+                last_cooldown = time.time()
                 while not stop_event.is_set():
+                    # Cooldown check
+                    if cooldown_enabled and (time.time() - last_cooldown) >= work_interval * 60:
+                        rest_duration = random.uniform(rest_min * 60, rest_max * 60)
+                        cooldown_active = True
+                        cooldown_end = time.time() + rest_duration
+                        skip_cooldown_flag = False
+                        logging.info(f"Cooldown started: resting for {rest_duration/60:.1f} minutes")
+                        while time.time() < cooldown_end and not stop_event.is_set() and not skip_cooldown_flag:
+                            await asyncio.sleep(1)
+                        cooldown_active = False
+                        skip_cooldown_flag = False
+                        last_cooldown = time.time()
+                        if stop_event.is_set():
+                            break
+                        logging.info("Cooldown ended, resuming...")
+
                     try:
                         items = read_csv_file('orders.csv')
                         unfilled = [i for i in items if i.get('order_filled', '').lower() != 'yes']
@@ -2465,9 +2736,9 @@ def run_bot_thread():
                             if not [i for i in items if i.get('order_filled', '').lower() != 'yes']:
                                 logging.info("All items filled!")
                         elif items_found and total_qty_added < 10:
-                            logging.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting.")
-                            for item in items_found:
-                                item['order_filled'] = ''
+                            # Keep items in cart — don't revert. Wait for more to become available.
+                            logging.warning(f"Have {total_qty_added} qty in cart (need 10 min). Keeping cart, re-checking in 30s...")
+                            await asyncio.sleep(30)
                         else:
                             logging.info("No items available. Re-checking...")
                             await asyncio.sleep(1)
@@ -2493,6 +2764,7 @@ def run_bot_thread():
                         except Exception:
                             pass
                         bot = WebAutomationBot(headless=headless)
+                        current_bot = bot
                         try:
                             await bot.setup(use_saved_auth=True)
                             logging.info("Bot recovered successfully")
@@ -2507,6 +2779,7 @@ def run_bot_thread():
                     await bot.cleanup()
                 except Exception:
                     pass
+                current_bot = None
 
         loop.run_until_complete(run_bot())
     except Exception as e:
@@ -2514,6 +2787,7 @@ def run_bot_thread():
     finally:
         loop.close()
         bot_running = False
+        cooldown_active = False
 
 if __name__ == '__main__':
     print("\n" + "="*50)

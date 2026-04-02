@@ -8,9 +8,29 @@ from typing import Optional
 from pathlib import Path
 import csv
 import time
-import fcntl
 import json
 import urllib.request
+import sys
+
+if sys.platform == 'win32':
+    import msvcrt
+    def _lock_shared(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    def _lock_exclusive(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    def _unlock(f):
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+else:
+    import fcntl
+    def _lock_shared(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+    def _lock_exclusive(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    def _unlock(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 # set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,7 +47,7 @@ def read_csv_file(filename):
     items = []
     try:
         with open(filename, 'r', newline='') as file:
-            fcntl.flock(file.fileno(), fcntl.LOCK_SH)
+            _lock_shared(file)
             try:
                 reader = csv.DictReader(file)
                 for row in reader:
@@ -40,7 +60,7 @@ def read_csv_file(filename):
                         'order_filled': row.get('order_filled', '').strip()
                     })
             finally:
-                fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+                _unlock(file)
         return items
     except Exception as e:
         logger.error(f"Error reading CSV file: {e}")
@@ -51,14 +71,14 @@ def update_csv_file(filename, items):
     """Update CSV file with file locking to prevent race conditions."""
     try:
         with open(filename, 'w', newline='') as file:
-            fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+            _lock_exclusive(file)
             try:
                 fieldnames = ['item_number', 'quantity', 'name', 'size', 'units', 'order_filled']
                 writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction='ignore')
                 writer.writeheader()
                 writer.writerows(items)
             finally:
-                fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+                _unlock(file)
         logger.info("CSV file updated")
     except Exception as e:
         logger.error(f"Error updating CSV file: {e}")
@@ -408,7 +428,7 @@ class WebAutomationBot:
                     if await loc.count() == 0:
                         continue
                     await loc.scroll_into_view_if_needed()
-                    await loc.click(force=True, timeout=2000)
+                    await loc.click(force=True, timeout=1000)
                     return True
                 except Exception:
                     continue
@@ -459,9 +479,9 @@ class WebAutomationBot:
             return False
 
         try:
-            result = await asyncio.wait_for(try_click(), timeout=10.0)
+            result = await asyncio.wait_for(try_click(), timeout=5.0)
         except asyncio.TimeoutError:
-            logger.warning("_click_add_item timed out after 10s")
+            logger.warning("_click_add_item timed out after 5s")
             result = False
 
         if result:
@@ -478,30 +498,32 @@ class WebAutomationBot:
         """
         ctx = self._content_frame if self._content_frame else self.page
 
-        # First check if available quantity is shown (fast check, short timeout)
+        # Fast check: look for qty element immediately (no waiting)
         try:
-            el = await ctx.wait_for_selector(QTY_AVAILABLE_SELECTOR, timeout=1500)
-            available_text = await el.text_content() or '0'
-            available_quantity = int(available_text.replace(',', ''))
-
-            if available_quantity == 0:
-                return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
-
-            return {'available': True, 'quantity': available_quantity, 'reason': ''}
+            el = await ctx.query_selector(QTY_AVAILABLE_SELECTOR)
+            if el:
+                available_text = await el.text_content() or '0'
+                available_quantity = int(available_text.replace(',', ''))
+                if available_quantity == 0:
+                    return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
+                return {'available': True, 'quantity': available_quantity, 'reason': ''}
         except Exception:
             pass
 
-        # Check if Add Item button is visible (indicates item exists and is available)
-        for frame in self._get_search_frames():
-            for sel in ADD_ITEM_SELECTORS:
-                try:
-                    el = await frame.query_selector(sel)
-                    if el:
-                        return {'available': True, 'quantity': -1, 'reason': ''}
-                except Exception:
-                    continue
+        # Brief wait in case page is still rendering (max 500ms)
+        try:
+            el = await ctx.wait_for_selector(QTY_AVAILABLE_SELECTOR, timeout=500)
+            if el:
+                available_text = await el.text_content() or '0'
+                available_quantity = int(available_text.replace(',', ''))
+                if available_quantity == 0:
+                    return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
+                return {'available': True, 'quantity': available_quantity, 'reason': ''}
+        except Exception:
+            pass
 
-        return {'available': False, 'quantity': 0, 'reason': 'item not found or unavailable'}
+        # Could not find qty element — item not loaded or doesn't exist
+        return {'available': False, 'quantity': 0, 'reason': 'qty element not found'}
 
     def _get_search_frames(self):
         """Get frames to search in priority order."""
@@ -519,6 +541,7 @@ class WebAutomationBot:
         Skips items with order_filled='yes'. Short-circuits on zero-qty items."""
         items_found = []
         total_qty_added = 0
+        self.trace_log = getattr(self, 'trace_log', [])
 
         for item in items:
             item_number = item['item_number']
@@ -527,51 +550,64 @@ class WebAutomationBot:
             if item.get('order_filled', '').lower() == 'yes':
                 continue
 
+            t_item_start = time.time()
+            trace = {'item': item_number, 'steps': {}, 'result': '', 'total_ms': 0}
+
             # Enter item number
             logger.info(f"Checking item #{item_number}...")
+            t0 = time.time()
             search_input = await self._get_search_input()
             await search_input.click()
             await search_input.fill('')
             await search_input.type(str(item_number), delay=15)
+            trace['steps']['type_item'] = round((time.time() - t0) * 1000)
 
+            t0 = time.time()
             await search_input.press('Enter')
             try:
-                await self.page.wait_for_load_state('networkidle', timeout=2000)
+                await self.page.wait_for_load_state('networkidle', timeout=1000)
             except Exception:
                 pass
-            await asyncio.sleep(0.2)
+            trace['steps']['search_wait'] = round((time.time() - t0) * 1000)
 
             # Quick availability check BEFORE trying to click Add Item
+            t0 = time.time()
             availability = await self._check_item_availability(item_number)
+            trace['steps']['qty_check'] = round((time.time() - t0) * 1000)
 
             if not availability['available']:
+                t0 = time.time()
                 logger.info(f"  x Item #{item_number} not available ({availability['reason']}), skipping")
-                # Clear search input quickly and move on
+                # Clear search input and move to next item immediately
                 try:
                     search_input = await self._get_search_input()
-                    await search_input.click()
-                    await search_input.press('Control+a')
-                    await search_input.press('Backspace')
-                    await asyncio.sleep(0.1)
+                    await search_input.triple_click()
                 except Exception:
                     pass
+                trace['steps']['clear_input'] = round((time.time() - t0) * 1000)
+                trace['result'] = f"SKIP ({availability['reason']})"
+                trace['total_ms'] = round((time.time() - t_item_start) * 1000)
+                self.trace_log.append(trace)
+                logger.info(f"  [TRACE] Item #{item_number}: {trace['total_ms']}ms — {' | '.join(f'{k}:{v}ms' for k,v in trace['steps'].items())}")
                 continue
 
             # Item is available - process it
             logger.info(f"  + Item #{item_number} is AVAILABLE!")
             available_quantity = availability['quantity']
 
+            backorder_qty = 0
             if available_quantity > 0:
                 logger.info(f"    Available quantity: {available_quantity}")
                 if quantity > available_quantity:
-                    adjusted_quantity = max(1, int(available_quantity * 0.7))
-                    logger.info(f"    Adjusting quantity from {quantity} to {adjusted_quantity} (70% of available)")
-                    quantity = adjusted_quantity
+                    backorder_qty = quantity - available_quantity
+                    logger.info(f"    Ordering {available_quantity} of {quantity} requested ({backorder_qty} → backorder)")
+                    quantity = available_quantity
                 else:
                     logger.info(f"    Using requested quantity: {quantity}")
 
             # Click Add Item button
             try:
+                t0 = time.time()
                 add_clicked = await self._click_add_item()
                 if not add_clicked:
                     ctx = self._content_frame if self._content_frame else self.page
@@ -580,26 +616,51 @@ class WebAutomationBot:
 
                 await self.page.wait_for_load_state('networkidle')
                 await asyncio.sleep(0.4)
+                trace['steps']['click_add'] = round((time.time() - t0) * 1000)
 
                 # Enter quantity in modal
+                t0 = time.time()
                 await self._enter_quantity_in_modal(quantity, item_number)
+                trace['steps']['enter_qty'] = round((time.time() - t0) * 1000)
 
                 # Mark item as processed
                 item['order_filled'] = 'yes'
+                item['quantity'] = quantity  # update to actual qty ordered
                 items_found.append(item)
                 total_qty_added += quantity
+
+                # Create backorder entry for remaining qty
+                if backorder_qty > 0:
+                    backorder_item = {
+                        'item_number': item_number,
+                        'quantity': backorder_qty,
+                        'name': item.get('name', ''),
+                        'size': item.get('size', ''),
+                        'units': item.get('units', ''),
+                        'order_filled': 'backorder'
+                    }
+                    items.append(backorder_item)
+                    logger.info(f"    + Backorder created: {backorder_qty} units for item #{item_number}")
+                    trace['result'] = f"ADDED {quantity} units (+{backorder_qty} backorder)"
+                else:
+                    trace['result'] = f"ADDED {quantity} units"
                 logger.info(f"    + Added to cart: {quantity} units (total: {total_qty_added})")
 
             except Exception as e:
                 logger.error(f"  x Item #{item_number} failed: {e}")
+                trace['result'] = f"FAILED: {e}"
                 try:
+                    # Dismiss any open modal/dialog
+                    await self.page.keyboard.press('Escape')
+                    await asyncio.sleep(0.2)
                     search_input = await self._get_search_input()
-                    await search_input.click()
-                    await search_input.press('Control+a')
-                    await search_input.press('Backspace')
-                    await asyncio.sleep(0.1)
+                    await search_input.triple_click()
                 except Exception:
                     pass
+
+            trace['total_ms'] = round((time.time() - t_item_start) * 1000)
+            self.trace_log.append(trace)
+            logger.info(f"  [TRACE] Item #{item_number}: {trace['total_ms']}ms — {' | '.join(f'{k}:{v}ms' for k,v in trace['steps'].items())}")
 
         return items_found, total_qty_added
 
