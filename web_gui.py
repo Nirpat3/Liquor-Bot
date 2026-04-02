@@ -594,6 +594,7 @@ HTML_TEMPLATE = '''
             <div class="tab" onclick="showTab('specialorders', this)">Special Orders</div>
             <div class="tab" onclick="showTab('salesintel', this)">Sales Intelligence</div>
             <div class="tab" onclick="showTab('timetrace', this)">Time Trace</div>
+            <div class="tab" onclick="showTab('intelligence', this)">Intelligence</div>
         </div>
 
         <!-- Control Tab -->
@@ -929,6 +930,83 @@ HTML_TEMPLATE = '''
             </div>
         </div>
 
+        <!-- Intelligence Tab -->
+        <div id="intelligence" class="tab-content">
+            <div class="stats-grid" id="intel-stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="intel-tracked" style="color:var(--accent)">-</div>
+                    <div class="stat-label">Items Tracked</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="intel-winrate" style="color:var(--success)">-</div>
+                    <div class="stat-label">Win Rate</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="intel-extreme" style="color:var(--danger)">-</div>
+                    <div class="stat-label">High Competition</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="intel-upcoming" style="color:var(--warning)">-</div>
+                    <div class="stat-label">Restocks in 48h</div>
+                </div>
+            </div>
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <div class="card-title" style="margin-bottom:0">Upcoming Restocks (Predicted)</div>
+                    <button class="btn btn-ghost btn-sm" onclick="loadIntelligence()">Refresh</button>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table id="intel-restock-table">
+                        <thead>
+                            <tr>
+                                <th>Item #</th>
+                                <th>Predicted Time</th>
+                                <th>Hours Away</th>
+                                <th>Avg Restock Qty</th>
+                                <th>Confidence</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                <p style="color:var(--text-muted); font-size:12px; margin-top:8px;">Predictions improve as the bot collects more scan data. Run the bot consistently to build pattern accuracy.</p>
+            </div>
+            <div class="card">
+                <div class="card-title">Competition Analysis</div>
+                <div style="overflow-x:auto;">
+                    <table id="intel-competition-table">
+                        <thead>
+                            <tr>
+                                <th>Item #</th>
+                                <th>Scans</th>
+                                <th>Availability</th>
+                                <th>Avg Depletion</th>
+                                <th>Competition</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-title">Win Rate by Item</div>
+                <div style="overflow-x:auto;">
+                    <table id="intel-winrate-table">
+                        <thead>
+                            <tr>
+                                <th>Item #</th>
+                                <th>Attempts</th>
+                                <th>Successes</th>
+                                <th>Win Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <div id="timetrace" class="tab-content">
             <div class="card">
                 <div class="card-title">Time Trace</div>
@@ -989,6 +1067,7 @@ HTML_TEMPLATE = '''
             if (tabName === 'orderdata') loadOrderFiles();
             if (tabName === 'specialorders') loadSpecialOrders();
             if (tabName === 'salesintel' && !salesLoaded) loadSalesData();
+            if (tabName === 'intelligence') loadIntelligence();
             if (tabName === 'timetrace') { loadTraces(); traceInterval = setInterval(loadTraces, 1000); }
         }
 
@@ -1486,6 +1565,64 @@ HTML_TEMPLATE = '''
                 return 0;
             });
             renderSalesResults();
+        }
+
+        // ── Intelligence ──
+        function loadIntelligence() {
+            fetch('/intelligence/summary').then(r => r.json()).then(data => {
+                document.getElementById('intel-tracked').textContent = data.total_items_tracked || 0;
+                const wr = data.win_rate || {};
+                document.getElementById('intel-winrate').textContent = wr.total_attempts > 0 ? Math.round(wr.overall_win_rate * 100) + '%' : '-';
+                const comp = data.competition?.summary || {};
+                document.getElementById('intel-extreme').textContent = (comp.extreme_competition || 0) + (comp.high_competition || 0);
+                document.getElementById('intel-upcoming').textContent = (data.upcoming_restocks || []).length;
+
+                // Restock predictions
+                const restockTbody = document.querySelector('#intel-restock-table tbody');
+                const restocks = data.upcoming_restocks || [];
+                restockTbody.innerHTML = restocks.length === 0
+                    ? '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No predictions yet — run the bot to collect data</td></tr>'
+                    : restocks.map(r => {
+                        const confColor = r.confidence > 0.7 ? 'var(--success)' : r.confidence > 0.4 ? 'var(--warning)' : 'var(--text-muted)';
+                        const timeStr = new Date(r.predicted_time).toLocaleString();
+                        return `<tr>
+                            <td style="font-weight:600">${r.item_number}</td>
+                            <td>${timeStr}</td>
+                            <td style="font-weight:600; color:${r.hours_until < 4 ? 'var(--danger)' : 'var(--text-primary)'}">${r.hours_until}h</td>
+                            <td>${r.avg_qty}</td>
+                            <td><span style="color:${confColor}; font-weight:600">${Math.round(r.confidence * 100)}%</span></td>
+                            <td><button class="btn btn-primary btn-sm" onclick="addToBot('${r.item_number}','','','')">+ Queue</button></td>
+                        </tr>`;
+                    }).join('');
+
+                // Competition
+                const compTbody = document.querySelector('#intel-competition-table tbody');
+                const compItems = (data.competition?.items || []).slice(0, 30);
+                compTbody.innerHTML = compItems.length === 0
+                    ? '<tr><td colspan="5" style="text-align:center; color:var(--text-muted);">No data yet</td></tr>'
+                    : compItems.map(c => {
+                        const lvlColor = c.competition_level === 'extreme' ? 'var(--danger)' : c.competition_level === 'high' ? 'var(--warning)' : 'var(--success)';
+                        return `<tr>
+                            <td style="font-weight:600">${c.item_number}</td>
+                            <td>${c.total_scans}</td>
+                            <td>${Math.round(c.availability_rate * 100)}%</td>
+                            <td>${c.avg_depletion_minutes > 0 ? c.avg_depletion_minutes + ' min' : '-'}</td>
+                            <td><span class="badge" style="background:${lvlColor}20; color:${lvlColor}">${c.competition_level}</span></td>
+                        </tr>`;
+                    }).join('');
+
+                // Win rates
+                const winTbody = document.querySelector('#intel-winrate-table tbody');
+                const winItems = (wr.by_item || []).slice(0, 20);
+                winTbody.innerHTML = winItems.length === 0
+                    ? '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">No order attempts logged yet</td></tr>'
+                    : winItems.map(w => `<tr>
+                        <td style="font-weight:600">${w.item_number}</td>
+                        <td>${w.attempts}</td>
+                        <td>${w.successes}</td>
+                        <td style="font-weight:600; color:${w.win_rate > 0.5 ? 'var(--success)' : 'var(--danger)'}">${Math.round(w.win_rate * 100)}%</td>
+                    </tr>`).join('');
+            }).catch(err => console.error('Intelligence load error:', err));
         }
 
         // ── Periodic status check ──
@@ -2663,6 +2800,54 @@ ITEM: #<number> <name> QTY: <quantity>"""
         })
     except Exception as e:
         return jsonify({'error': f'Shre AI unavailable: {e}', 'recommendation': '', 'suggested_items': []})
+
+
+# ── Intelligence API ──
+
+@app.route('/intelligence/summary')
+def intelligence_summary():
+    try:
+        from intelligence import get_intelligence_summary
+        return jsonify(get_intelligence_summary(days_back=14))
+    except Exception as e:
+        return jsonify({'error': str(e), 'total_items_tracked': 0,
+                        'upcoming_restocks': [], 'competition': {'items': [], 'summary': {}},
+                        'win_rate': {'overall_win_rate': 0, 'total_attempts': 0, 'by_item': []}})
+
+
+@app.route('/intelligence/patterns')
+def intelligence_patterns():
+    try:
+        from intelligence import analyze_restock_patterns
+        days = int(request.args.get('days', 30))
+        return jsonify(analyze_restock_patterns(days))
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+
+@app.route('/intelligence/priority', methods=['POST'])
+def intelligence_priority():
+    """Get priority-sorted queue based on intelligence + sales data."""
+    try:
+        from intelligence import build_priority_queue, analyze_restock_patterns
+        data = request.json
+        items = data.get('items', [])
+        patterns = analyze_restock_patterns(14)
+        scored = build_priority_queue(items, patterns)
+        return jsonify({'items': scored})
+    except Exception as e:
+        return jsonify({'error': str(e), 'items': []})
+
+
+@app.route('/intelligence/schedule')
+def intelligence_schedule():
+    try:
+        from intelligence import get_optimal_check_schedule, analyze_restock_patterns
+        patterns = analyze_restock_patterns(14)
+        schedule = get_optimal_check_schedule(patterns)
+        return jsonify({'schedule': schedule})
+    except Exception as e:
+        return jsonify({'error': str(e), 'schedule': []})
 
 
 def run_bot_thread():

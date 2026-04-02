@@ -573,7 +573,16 @@ class WebAutomationBot:
             # Quick availability check BEFORE trying to click Add Item
             t0 = time.time()
             availability = await self._check_item_availability(item_number)
-            trace['steps']['qty_check'] = round((time.time() - t0) * 1000)
+            check_ms = round((time.time() - t0) * 1000)
+            trace['steps']['qty_check'] = check_ms
+
+            # Log scan for intelligence engine
+            try:
+                from intelligence import log_scan
+                log_scan(item_number, availability.get('quantity', 0),
+                         availability['available'], check_ms)
+            except Exception:
+                pass
 
             if not availability['available']:
                 t0 = time.time()
@@ -628,6 +637,15 @@ class WebAutomationBot:
                 item['quantity'] = quantity  # update to actual qty ordered
                 items_found.append(item)
                 total_qty_added += quantity
+
+                # Log win for intelligence engine
+                try:
+                    from intelligence import log_scan, log_win
+                    log_scan(item_number, available_quantity, True, check_ms,
+                             order_attempted=True, order_success=True)
+                    log_win(item_number, quantity, available_quantity)
+                except Exception:
+                    pass
 
                 # Create backorder entry for remaining qty
                 if backorder_qty > 0:
