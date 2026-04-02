@@ -534,22 +534,47 @@ class WebAutomationBot:
                     else:
                         logger.info(f"    Using requested quantity: {quantity}")
                 else:
-                    # Could not read qty (-1) — check if Add Item button is active as fallback
-                    logger.info(f"  [STEP 1] Qty unknown, checking Add Item button state...")
-                    add_item_visible = None
-                    for sel in ['span:has-text("Add Item")', 'button:has-text("Add Item")']:
+                    # Could not read qty via fgvt_Dm-m-1 — try broader selectors
+                    logger.info(f"  [STEP 1] Trying broader qty selectors...")
+                    for qty_sel in ['span[id^="fgvt_Dm"]', 'span[id^="fgvt_"]']:
                         try:
-                            add_item_visible = await ctx.wait_for_selector(sel, timeout=1000)
-                            if add_item_visible:
-                                break
+                            els = await ctx.query_selector_all(qty_sel)
+                            for qel in els:
+                                txt = (await qel.text_content() or '').replace(',', '').strip()
+                                if txt.isdigit():
+                                    val = int(txt)
+                                    el_id = await qel.get_attribute('id') or '?'
+                                    logger.info(f"    Found {el_id}: {val}")
+                                    if val > 0 and available_quantity <= 0:
+                                        available_quantity = val
                         except Exception:
                             continue
-                    if not add_item_visible:
-                        delay = random.uniform(1.0, 3.0)
-                        logger.info(f"  x Item #{item_number} — not available, skipping (waiting {delay:.1f}s)")
-                        await asyncio.sleep(delay)
-                        raise Exception("Add Item button not found and qty unknown")
-                    logger.info(f"  ✓ Item #{item_number} — qty unknown but Add Item active, proceeding")
+
+                    if available_quantity > 0:
+                        logger.info(f"  ✓ Item #{item_number} is AVAILABLE! (qty: {available_quantity} from broader scan)")
+                        if quantity > available_quantity:
+                            backorder_qty = quantity - available_quantity
+                            logger.info(f"    Ordering {available_quantity} of {quantity} requested ({backorder_qty} → backorder)")
+                            quantity = available_quantity
+                        else:
+                            logger.info(f"    Using requested quantity: {quantity}")
+                    else:
+                        # Still unknown — check if Add Item button is active as last resort
+                        logger.info(f"  [STEP 1] Qty still unknown, checking Add Item button state...")
+                        add_item_visible = None
+                        for sel in ['span:has-text("Add Item")', 'button:has-text("Add Item")']:
+                            try:
+                                add_item_visible = await ctx.wait_for_selector(sel, timeout=1000)
+                                if add_item_visible:
+                                    break
+                            except Exception:
+                                continue
+                        if not add_item_visible:
+                            delay = random.uniform(1.0, 3.0)
+                            logger.info(f"  x Item #{item_number} — not available, skipping (waiting {delay:.1f}s)")
+                            await asyncio.sleep(delay)
+                            raise Exception("Add Item button not found and qty unknown")
+                        logger.warning(f"  ⚠ Item #{item_number} — qty unknown but Add Item active, using requested qty: {quantity}")
 
                 # click Add Item button
                 logger.info(f"  [STEP 2] Clicking Add Item button...")
