@@ -2918,8 +2918,14 @@ def run_bot_thread():
                             await bot.submit_order()
                             update_csv_file('orders.csv', items)
                             on_item_entry = False
-                            if not [i for i in items if i.get('order_filled', '').lower() != 'yes']:
+                            remaining = [i for i in items if i.get('order_filled', '').lower() not in ('yes',)]
+                            if not remaining:
                                 logging.info("All items filled!")
+                            else:
+                                logging.info(f"{len(remaining)} items remaining — restarting with manual entry...")
+                                await asyncio.sleep(2)
+                                await bot.start_order()
+                                on_item_entry = True
                         elif items_found and total_qty_added < 10:
                             # Keep items in cart — don't revert. Wait for more to become available.
                             logging.warning(f"Have {total_qty_added} qty in cart (need 10 min). Keeping cart, re-checking in 30s...")
@@ -2973,6 +2979,19 @@ def run_bot_thread():
         loop.close()
         bot_running = False
         cooldown_active = False
+        # Reset backorders to pending for next run
+        try:
+            orders = _read_csv_locked()
+            changed = False
+            for o in orders:
+                if o.get('order_filled', '').lower() == 'backorder':
+                    o['order_filled'] = ''
+                    changed = True
+            if changed:
+                _write_csv_locked(orders)
+                logging.info("Reset backorder items to pending")
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     print("\n" + "="*50)
