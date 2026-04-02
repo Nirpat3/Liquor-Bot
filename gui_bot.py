@@ -535,12 +535,31 @@ class BotGUI:
             # update UI on main thread
             self.root.after(0, self.on_bot_stopped)
             
+    def _reset_backorders(self):
+        """Reset backorder items to pending so they retry on next start."""
+        try:
+            from bot_script import read_csv_file, update_csv_file
+            items = read_csv_file('orders.csv')
+            changed = False
+            for item in items:
+                if item.get('order_filled', '').lower() == 'backorder':
+                    item['order_filled'] = ''
+                    changed = True
+            if changed:
+                update_csv_file('orders.csv', items)
+                logging.info("Reset backorder items to pending")
+        except Exception as e:
+            logging.error(f"Failed to reset backorders: {e}")
+
     def on_bot_stopped(self):
         # called when bot stops
         self.bot_running = False
+        self.bot = None
         self.start_button.config(text="Start Bot")
         self.status_label.config(text="Status: Stopped", foreground='red')
         self.progress.stop()
+        # Reset backorder items to pending so they retry on next start
+        self._reset_backorders()
         self.load_csv()  # reload csv to show updates
         self.update_stats()
         

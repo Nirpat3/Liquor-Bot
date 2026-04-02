@@ -1564,6 +1564,19 @@ def run_bot_thread():
         loop.close()
         bot_running = False
         cooldown_active = False
+        # Reset backorders to pending for next run
+        try:
+            orders = _read_csv_locked()
+            changed = False
+            for o in orders:
+                if o.get('order_filled', '').lower() == 'backorder':
+                    o['order_filled'] = ''
+                    changed = True
+            if changed:
+                _write_csv_locked(orders)
+                logging.info("Reset backorder items to pending")
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     print("\n" + "="*50)

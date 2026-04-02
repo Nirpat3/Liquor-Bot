@@ -520,7 +520,7 @@ class WebAutomationBot:
             # Human-like delay between searches (1-3s random)
             import random
             delay = random.uniform(1.0, 3.0)
-            logger.info(f"Checking item #{item_number}... (waiting {delay:.1f}s)")
+            logger.info(f"Checking item #{item_number} (requested qty: {quantity}, status: {item.get('order_filled', 'pending')})... (waiting {delay:.1f}s)")
             await asyncio.sleep(delay)
 
             t0 = time.time()
@@ -591,9 +591,10 @@ class WebAutomationBot:
                 await self._enter_quantity_in_modal(quantity, item_number)
                 trace['steps']['enter_qty'] = round((time.time() - t0) * 1000)
 
-                # Mark item as processed
+                # Mark item as processed — update qty to what was actually ordered
+                original_qty = int(item['quantity'])
                 item['order_filled'] = 'yes'
-                item['quantity'] = quantity  # update to actual qty ordered
+                item['quantity'] = quantity
                 items_found.append(item)
                 total_qty_added += quantity
 
