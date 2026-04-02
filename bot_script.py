@@ -389,216 +389,186 @@ class WebAutomationBot:
         raise Exception("Could not find item search input")
 
     async def _click_add_item(self, hint_frame=None):
-        """Click Add Item button. When hint_frame is provided (from availability check),
-        tries that frame first for fastest path. Falls back to full search."""
+        """Click Add Item — restored original 8-method approach from working version.
+        When hint_frame is provided, tries that frame first."""
 
-        async def _try_locator_click(frame, label=""):
-            """Try clicking Add Item via Playwright locators in a given frame."""
+        async def try_click_in_frame(frame):
+            """Locator-based click across multiple selectors in a single frame."""
             for sel in ADD_ITEM_SELECTORS:
                 try:
                     loc = frame.locator(sel).first
-                    cnt = await loc.count()
-                    if cnt == 0:
+                    if await loc.count() == 0:
                         continue
-                    logger.info(f"    [AddItem] Found '{sel}' in {label} (count={cnt}), clicking...")
                     await loc.scroll_into_view_if_needed()
                     await loc.click(force=True, timeout=2000)
-                    logger.info(f"    [AddItem] Locator click succeeded via '{sel}' in {label}")
+                    logger.info(f"    [AddItem] Locator click succeeded: {sel}")
                     return True
-                except Exception as e:
-                    logger.debug(f"    [AddItem] Locator '{sel}' in {label} failed: {e}")
+                except Exception:
                     continue
-            return False
-
-        async def _try_js_click(ctx, label=""):
-            """Try clicking Add Item via JavaScript in a given context."""
-            result = await ctx.evaluate("""() => {
-                const all = document.querySelectorAll('span, div, td, button, a');
-                for (const e of all) {
-                    const t = e.textContent && e.textContent.trim();
-                    if ((t === 'Add Item' || t.includes('Add Item')) && t.length < 20 && e.offsetParent) {
-                        const target = e.closest('[data-event]') || e.closest('td') || e.closest('div[role="button"]') || e.parentElement || e;
-                        target.scrollIntoView({block: 'center'});
-                        target.click();
-                        return 'clicked: ' + target.tagName + '.' + (target.className || '');
-                    }
-                }
-                return '';
-            }""")
-            if result:
-                logger.info(f"    [AddItem] JS click succeeded in {label}: {result}")
-                return True
-            return False
-
-        async def _try_dispatch_click(ctx, label=""):
-            """Try clicking Add Item via dispatchEvent (for ServiceNow/Glide buttons)."""
-            result = await ctx.evaluate("""() => {
-                const all = document.querySelectorAll('span, div, td, button, a');
-                for (const e of all) {
-                    const t = e.textContent && e.textContent.trim();
-                    if ((t === 'Add Item' || t.includes('Add Item')) && t.length < 20 && e.offsetParent) {
-                        const target = e.closest('[data-event]') || e.closest('td') || e.closest('div[role="button"]') || e.parentElement || e;
-                        target.scrollIntoView({block: 'center'});
-                        // Try multiple event dispatch methods
-                        target.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-                        target.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-                        target.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                        // Also try the element itself (not just target)
-                        if (target !== e) {
-                            e.dispatchEvent(new MouseEvent('click', {bubbles: true}));
-                        }
-                        return 'dispatched: ' + target.tagName + '.' + (target.className || '');
-                    }
-                }
-                return '';
-            }""")
-            if result:
-                logger.info(f"    [AddItem] dispatchEvent click in {label}: {result}")
-                return True
             return False
 
         async def try_click():
-            # === FAST PATH: Try hint_frame first (same frame where qty was found) ===
+            # === FAST PATH: hint_frame from availability check ===
             if hint_frame:
-                logger.info(f"    [AddItem] Trying hint frame first (same frame where qty detected)...")
+                logger.info(f"    [AddItem] Trying hint frame first...")
                 try:
-                    if await _try_locator_click(hint_frame, "hint_frame"):
+                    if await try_click_in_frame(hint_frame):
                         return True
                 except Exception:
                     pass
-                try:
-                    if await _try_js_click(hint_frame, "hint_frame"):
-                        return True
-                except Exception:
-                    pass
-                try:
-                    if await _try_dispatch_click(hint_frame, "hint_frame"):
-                        return True
-                except Exception:
-                    pass
-                logger.info(f"    [AddItem] Hint frame didn't work, falling back to full search...")
 
-            # === FULL SEARCH: Build frame list and try all strategies ===
-            frames_to_try = []
-            if self._content_frame:
-                frames_to_try.append((self._content_frame, "content_frame"))
-            frames_to_try.append((self.page, "main_page"))
-            for i, fr in enumerate(self.page.frames):
+            # Try content frame, then main page, then all other frames
+            if self._content_frame and self._content_frame != hint_frame:
+                if await try_click_in_frame(self._content_frame):
+                    return True
+            if await try_click_in_frame(self.page):
+                return True
+            for fr in self.page.frames:
                 if fr != self.page.main_frame:
-                    already = any(f[0] == fr for f in frames_to_try)
-                    if not already:
-                        frames_to_try.append((fr, f"frame_{i}"))
+                    try:
+                        if await try_click_in_frame(fr):
+                            return True
+                    except Exception:
+                        pass
 
-            # Skip hint_frame in full search since we already tried it
-            if hint_frame:
-                frames_to_try = [(f, l) for f, l in frames_to_try if f != hint_frame]
+            # Use the frame where content was found for JS-based methods
+            eval_page = hint_frame or self._content_frame or self.page
 
-            logger.info(f"    [AddItem] Searching {len(frames_to_try)} remaining frames...")
+            # Method 1: JS — find "Add Item", get clickable parent (data-event/td), mouse events at center
+            try:
+                r = await eval_page.evaluate("""() => {
+                    const all = document.querySelectorAll('span, div, td, button, a');
+                    for (const e of all) {
+                        const t = e.textContent && e.textContent.trim();
+                        if ((t === 'Add Item' || t.includes('Add Item')) && t.length < 20 && e.offsetParent) {
+                            const target = e.closest('[data-event]') || e.closest('td') || e.closest('div[role="button"]') || e.parentElement || e;
+                            target.scrollIntoView({block: 'center'});
+                            const rect = target.getBoundingClientRect();
+                            const x = rect.left + rect.width/2, y = rect.top + rect.height/2;
+                            ['mousedown','mouseup','click'].forEach(n => target.dispatchEvent(new MouseEvent(n, {bubbles:true,cancelable:true,view:window,clientX:x,clientY:y})));
+                            return true;
+                        }
+                    }
+                    return false;
+                }""")
+                if r:
+                    logger.info("    [AddItem] Method 1 (JS data-event parent + mouse coords) succeeded")
+                    return True
+            except Exception:
+                pass
 
-            # Wait briefly for button to become interactive after search results load
-            await asyncio.sleep(0.3)
+            # Method 2: JS — direct .click() on element
+            try:
+                r = await eval_page.evaluate("""() => {
+                    const all = document.querySelectorAll('span, div, td, button');
+                    for (const e of all) {
+                        const t = e.textContent && e.textContent.trim();
+                        if ((t === 'Add Item' || t.includes('Add Item')) && t.length < 20 && e.offsetParent) {
+                            e.scrollIntoView({block: 'center'});
+                            e.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""")
+                if r:
+                    logger.info("    [AddItem] Method 2 (JS direct click) succeeded")
+                    return True
+            except Exception:
+                pass
 
-            # Phase 1: Locator-based attempts
-            for frame, label in frames_to_try:
-                try:
-                    if await _try_locator_click(frame, label):
+            # Method 3: Playwright — div[data-event] containing Add Item, mouse.click at center
+            try:
+                el = await eval_page.query_selector('div[data-event]:has(span:has-text("Add Item"))')
+                if el:
+                    await el.scroll_into_view_if_needed()
+                    box = await el.bounding_box()
+                    if box:
+                        await self.page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                        logger.info("    [AddItem] Method 3 (data-event div mouse.click) succeeded")
                         return True
-                except Exception:
-                    continue
+            except Exception:
+                pass
 
-            # Phase 2: JS-based attempts
-            for ctx, label in frames_to_try:
-                try:
-                    if await _try_js_click(ctx, label):
+            # Method 4: Playwright — td containing Add Item
+            try:
+                el = await eval_page.query_selector('td:has(span:has-text("Add Item"))')
+                if el:
+                    await el.scroll_into_view_if_needed()
+                    await el.click(force=True)
+                    logger.info("    [AddItem] Method 4 (td click) succeeded")
+                    return True
+            except Exception:
+                pass
+
+            # Method 5: Playwright — span.ActionButtonCaptionText (Glide specific)
+            try:
+                el = await eval_page.query_selector('span.ActionButtonCaptionText:has-text("Add Item")')
+                if el:
+                    await el.scroll_into_view_if_needed()
+                    await el.click(force=True)
+                    logger.info("    [AddItem] Method 5 (ActionButtonCaptionText) succeeded")
+                    return True
+            except Exception:
+                pass
+
+            # Method 6: Playwright — any span with Add Item, mouse.click at bounding box center
+            try:
+                el = await eval_page.query_selector('span:has-text("Add Item")')
+                if el:
+                    await el.scroll_into_view_if_needed()
+                    box = await el.bounding_box()
+                    if box:
+                        await self.page.mouse.click(box['x'] + box['width']/2, box['y'] + box['height']/2)
+                        logger.info("    [AddItem] Method 6 (span mouse.click at coords) succeeded")
                         return True
-                except Exception:
-                    continue
+            except Exception:
+                pass
 
-            # Phase 3: dispatchEvent (ServiceNow/Glide buttons sometimes need this)
-            for ctx, label in frames_to_try:
-                try:
-                    if await _try_dispatch_click(ctx, label):
-                        return True
-                except Exception:
-                    continue
+            # Method 7: Playwright getByText — flexible text match
+            try:
+                loc = eval_page.locator('text=Add Item')
+                if await loc.count() > 0:
+                    await loc.first.scroll_into_view_if_needed()
+                    await loc.first.click(force=True)
+                    logger.info("    [AddItem] Method 7 (getByText) succeeded")
+                    return True
+            except Exception:
+                pass
 
-            logger.warning("    [AddItem] All click strategies failed across all frames")
-            return False
+            # Method 8: JS — case-insensitive "add" + "item" with parent walk-up
+            try:
+                r = await eval_page.evaluate("""() => {
+                    const all = document.querySelectorAll('span, div, td, button, a');
+                    for (const e of all) {
+                        const t = (e.textContent || '').toLowerCase();
+                        if (t.includes('add') && t.includes('item') && t.length < 20 && e.offsetParent) {
+                            const target = e.closest('[data-event]') || e.closest('td') || e.parentElement || e;
+                            target.scrollIntoView({block: 'center'});
+                            target.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""")
+                if r:
+                    logger.info("    [AddItem] Method 8 (case-insensitive fallback) succeeded")
+                    return True
+            except Exception:
+                pass
 
-        async def _verify_click_worked():
-            """Check if a modal/dialog appeared after clicking Add Item."""
-            await asyncio.sleep(0.8)
-            all_frames = [self.page] + list(self.page.frames)
-            for fr in all_frames:
-                try:
-                    # Look for qty input field (means modal opened)
-                    el = (await fr.query_selector('input[id^="Ds_1"]')
-                          or await fr.query_selector('input.DocControlQuantity')
-                          or await fr.query_selector('[role="dialog"]')
-                          or await fr.query_selector('[class*="modal"]'))
-                    if el:
-                        logger.info("    [AddItem] Verified: modal/qty input appeared after click")
-                        return True
-                except Exception:
-                    continue
+            logger.warning("    [AddItem] All 8 methods failed")
             return False
 
         try:
-            result = await asyncio.wait_for(try_click(), timeout=8.0)
+            result = await asyncio.wait_for(try_click(), timeout=15.0)
         except asyncio.TimeoutError:
-            logger.warning("_click_add_item timed out after 8s")
+            logger.warning("    _click_add_item timed out after 15s")
             result = False
 
         if result:
-            # Verify the click actually opened a modal
-            verified = await _verify_click_worked()
-            if not verified:
-                logger.warning("    [AddItem] Click reported success but no modal appeared — retrying with different strategy")
-                # Take a screenshot to debug
-                try:
-                    await self.page.screenshot(path="add_item_click_no_modal.png")
-                except Exception:
-                    pass
-                # Try one more time with JS that walks up to the closest interactive parent
-                all_frames = self._get_search_frames()
-                for ctx in all_frames:
-                    try:
-                        retry_result = await ctx.evaluate("""() => {
-                            const all = document.querySelectorAll('*');
-                            for (const e of all) {
-                                const t = (e.textContent || '').trim();
-                                if (t === 'Add Item' && e.offsetParent) {
-                                    // Walk up the DOM to find the real clickable parent
-                                    let target = e;
-                                    for (let i = 0; i < 5; i++) {
-                                        if (!target.parentElement) break;
-                                        target = target.parentElement;
-                                        if (target.tagName === 'A' || target.tagName === 'TD' ||
-                                            target.onclick || target.getAttribute('data-event') ||
-                                            target.getAttribute('role') === 'button') {
-                                            break;
-                                        }
-                                    }
-                                    // Fire full mouse event sequence on the interactive parent
-                                    ['mouseenter', 'mouseover', 'mousedown', 'mouseup', 'click'].forEach(evt => {
-                                        target.dispatchEvent(new MouseEvent(evt, {bubbles: true, cancelable: true, view: window}));
-                                    });
-                                    return 'retried on: ' + target.tagName + '#' + (target.id || '') + '.' + (target.className || '');
-                                }
-                            }
-                            return '';
-                        }""")
-                        if retry_result:
-                            logger.info(f"    [AddItem] Retry click: {retry_result}")
-                            verified = await _verify_click_worked()
-                            if verified:
-                                return True
-                    except Exception:
-                        continue
-                # Even if not verified, return True so the flow continues to try entering qty
-                logger.warning("    [AddItem] Could not verify modal — proceeding anyway")
-            return True
-        return False
+            await asyncio.sleep(0.6)
+        return result
 
     async def _check_item_availability(self, item_number: int) -> dict:
         """Check if an item is available and return availability info.
@@ -705,92 +675,97 @@ class WebAutomationBot:
             await asyncio.sleep(0.5)
             trace['steps']['search_wait'] = round((time.time() - t0) * 1000)
 
-            # Quick availability check BEFORE trying to click Add Item
+            # ORIGINAL FLOW: Check if Add Item button appears (= item is available)
             t0 = time.time()
-            availability = await self._check_item_availability(item_number)
-            trace['steps']['qty_check'] = round((time.time() - t0) * 1000)
+            add_item_visible = None
+            found_frame = None
+            search_frames = ([self._content_frame] if self._content_frame else []) + [self.page] + list(self.page.frames)
+            for frame in search_frames:
+                if not frame:
+                    continue
+                for sel in ADD_ITEM_SELECTORS:
+                    try:
+                        add_item_visible = await frame.wait_for_selector(sel, timeout=2000)
+                        if add_item_visible:
+                            found_frame = frame
+                            break
+                    except Exception:
+                        continue
+                if add_item_visible:
+                    break
+            trace['steps']['check_button'] = round((time.time() - t0) * 1000)
 
-            if not availability['available']:
+            if not add_item_visible:
                 t0 = time.time()
-                logger.info(f"  x Item #{item_number} not available ({availability['reason']}), skipping")
-                # Clear search input and move to next item immediately
+                logger.info(f"  x Item #{item_number} — Add Item button not found, skipping")
                 try:
                     search_input = await self._get_search_input()
                     await search_input.triple_click()
                 except Exception:
                     pass
                 trace['steps']['clear_input'] = round((time.time() - t0) * 1000)
-                trace['result'] = f"SKIP ({availability['reason']})"
+                trace['result'] = "SKIP (no Add Item button)"
                 trace['total_ms'] = round((time.time() - t_item_start) * 1000)
                 self.trace_log.append(trace)
                 logger.info(f"  [TRACE] Item #{item_number}: {trace['total_ms']}ms — {' | '.join(f'{k}:{v}ms' for k,v in trace['steps'].items())}")
                 continue
 
-            # Item is available - process it
+            # Item is available — Add Item button found
             logger.info(f"  + Item #{item_number} is AVAILABLE!")
-            available_quantity = availability['quantity']
-            found_frame = availability.get('frame')  # Frame where qty/button was found
+            ctx = found_frame or self._content_frame or self.page
 
+            # Read available quantity and adjust if needed
+            t0 = time.time()
+            available_quantity = -1
             backorder_qty = 0
+            for sel in QTY_AVAILABLE_SELECTORS:
+                try:
+                    el = await ctx.wait_for_selector(sel, timeout=3000)
+                    if el:
+                        available_text = await el.text_content() or '0'
+                        available_quantity = int(available_text.replace(',', '').strip())
+                        logger.info(f"    Available quantity: {available_quantity} (via {sel})")
+                        break
+                except Exception:
+                    continue
+            trace['steps']['read_qty'] = round((time.time() - t0) * 1000)
+
+            if available_quantity == 0:
+                logger.info(f"  x Item #{item_number} available qty is 0, skipping")
+                try:
+                    search_input = await self._get_search_input()
+                    await search_input.triple_click()
+                except Exception:
+                    pass
+                trace['result'] = "SKIP (available qty is 0)"
+                trace['total_ms'] = round((time.time() - t_item_start) * 1000)
+                self.trace_log.append(trace)
+                continue
+
             if available_quantity > 0:
-                logger.info(f"    Available quantity: {available_quantity}")
                 if quantity > available_quantity:
                     backorder_qty = quantity - available_quantity
                     logger.info(f"    Ordering {available_quantity} of {quantity} requested ({backorder_qty} → backorder)")
                     quantity = available_quantity
                 else:
                     logger.info(f"    Using requested quantity: {quantity}")
+            else:
+                logger.warning(f"    Could not read available quantity, using requested: {quantity}")
 
-            # Click Add Item button — pass the frame where we found availability
+            # Click Add Item button (original 8-method approach, 15s timeout)
             try:
                 t0 = time.time()
-
-                # Wait for Add Item button to be visible and ready before clicking
-                add_btn_ready = False
-                target_frame = found_frame or self._content_frame or self.page
-                for wait_sel in ADD_ITEM_SELECTORS:
-                    try:
-                        loc = target_frame.locator(wait_sel).first
-                        await loc.wait_for(state='visible', timeout=3000)
-                        add_btn_ready = True
-                        logger.info(f"    Add Item button ready via '{wait_sel}'")
-                        break
-                    except Exception:
-                        continue
-
-                if not add_btn_ready:
-                    # Also check other frames
-                    for fr in self.page.frames:
-                        if fr == target_frame:
-                            continue
-                        for wait_sel in ADD_ITEM_SELECTORS:
-                            try:
-                                loc = fr.locator(wait_sel).first
-                                await loc.wait_for(state='visible', timeout=1000)
-                                add_btn_ready = True
-                                found_frame = fr  # Update hint frame
-                                logger.info(f"    Add Item button found in different frame via '{wait_sel}'")
-                                break
-                            except Exception:
-                                continue
-                        if add_btn_ready:
-                            break
-
-                if not add_btn_ready:
-                    logger.warning(f"    Add Item button never became visible — trying click anyway")
-
                 add_clicked = await self._click_add_item(hint_frame=found_frame)
+                if add_clicked:
+                    logger.info("    Add Item clicked, waiting for quantity modal...")
                 if not add_clicked:
-                    # Take screenshot and dump page HTML for debugging
                     await self.page.screenshot(path="add_item_fail.png")
-                    # Try to capture what's on the page
                     try:
-                        frames = self._get_search_frames()
-                        for ctx in frames:
-                            html = await ctx.evaluate("() => document.body ? document.body.innerHTML.substring(0, 2000) : ''")
-                            if 'Add Item' in html:
-                                logger.error(f"  'Add Item' text found in page HTML but click failed. HTML snippet: ...{html[max(0, html.index('Add Item')-100):html.index('Add Item')+100]}...")
-                                break
+                        html_snippet = await ctx.evaluate("""() => {
+                            const spans = document.querySelectorAll('span');
+                            return Array.from(spans).filter(s => s.textContent && s.textContent.includes('Add')).slice(0,10).map(s => ({text: s.textContent.trim().substring(0,50), tag: s.tagName, cls: s.className, id: s.id}));
+                        }""")
+                        logger.error(f"    Add Item elements on page: {html_snippet}")
                     except Exception:
                         pass
                     raise Exception("Failed to click Add Item - see add_item_fail.png")
