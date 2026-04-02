@@ -521,41 +521,46 @@ class WebAutomationBot:
                     except Exception:
                         continue
 
+                import random
                 if row_data and row_data.get('fields'):
                     logger.info(f"  [STEP 1] Search result fields for item #{item_number}:")
                     for f in row_data['fields']:
                         logger.info(f"    {f['id']}: {f['text']}")
                     logger.info(f"  [STEP 1] Add Item button visible: {row_data.get('hasAddItem', False)}")
 
-                    # Quick zero check: if Add Item is NOT visible, skip with human delay
                     if not row_data.get('hasAddItem', False):
-                        import random
+                        # No Add Item button found — item not available, skip fast
                         delay = random.uniform(1.0, 3.0)
                         logger.info(f"  x Item #{item_number} — no Add Item button, skipping (waiting {delay:.1f}s)")
                         await asyncio.sleep(delay)
                         raise Exception("Add Item button not found (from row scan)")
-                else:
-                    logger.info(f"  [STEP 1] Could not read result row fields")
 
-                # STEP 2: Wait for Add Item button to be fully ready
-                logger.info(f"  [STEP 2] Waiting for Add Item button...")
-                add_item_visible = None
-                for frame in search_frames:
-                    if not frame:
-                        continue
-                    for sel in ['span:has-text("Add Item")', 'button:has-text("Add Item")', 'div:has(span:has-text("Add Item"))']:
-                        try:
-                            add_item_visible = await frame.wait_for_selector(sel, timeout=2000)
-                            if add_item_visible:
-                                logger.info(f"  [STEP 2] Found Add Item via '{sel}'")
-                                break
-                        except Exception:
+                    # Add Item IS visible — go straight to STEP 3 (read qty), skip slow STEP 2
+                    logger.info(f"  ✓ Item #{item_number} is AVAILABLE! (Add Item found in row scan)")
+
+                else:
+                    # Could not scan row — fall back to wait_for_selector (original slow path)
+                    logger.info(f"  [STEP 1] Could not read result row, using slow check...")
+                    add_item_visible = None
+                    for frame in search_frames:
+                        if not frame:
                             continue
-                    if add_item_visible:
-                        break
-                if not add_item_visible:
-                    raise Exception("Add Item button not found after checking all frames/selectors")
-                logger.info(f"  ✓ Item #{item_number} is AVAILABLE!")
+                        for sel in ['span:has-text("Add Item")', 'button:has-text("Add Item")', 'div:has(span:has-text("Add Item"))']:
+                            try:
+                                add_item_visible = await frame.wait_for_selector(sel, timeout=2000)
+                                if add_item_visible:
+                                    logger.info(f"  [STEP 2] Found Add Item via '{sel}'")
+                                    break
+                            except Exception:
+                                continue
+                        if add_item_visible:
+                            break
+                    if not add_item_visible:
+                        delay = random.uniform(1.0, 3.0)
+                        logger.info(f"  x Item #{item_number} — not available, skipping (waiting {delay:.1f}s)")
+                        await asyncio.sleep(delay)
+                        raise Exception("Add Item button not found")
+                    logger.info(f"  ✓ Item #{item_number} is AVAILABLE!")
 
                 # STEP 3: Read available quantity — try known selector, then scan row fields
                 logger.info(f"  [STEP 3] Reading available quantity...")
