@@ -101,9 +101,12 @@ def create_sample_csv():
 # Selectors that appear on the site (Glide/ServiceNow-style dynamic IDs)
 MAIN_PAGE_SELECTOR = 'span.IconCaptionText:has-text("Add/View Retail Orders")'
 ADD_ITEM_SELECTORS = [
-    'span:has-text("Add Item")',
+    'a:has-text("Add Item")',
+    'td:has-text("Add Item")',
     'button:has-text("Add Item")',
-    'div:has(span:has-text("Add Item"))',
+    'span:has-text("Add Item")',
+    'div[role="button"]:has-text("Add Item")',
+    'div:has(> span:has-text("Add Item"))',
 ]
 PASSWORD_SELECTORS = [
     'input#Dn-k',
@@ -522,6 +525,24 @@ class WebAutomationBot:
             logger.warning("    [AddItem] All click strategies failed across all frames")
             return False
 
+        async def _verify_click_worked():
+            """Check if a modal/dialog appeared after clicking Add Item."""
+            await asyncio.sleep(0.8)
+            all_frames = [self.page] + list(self.page.frames)
+            for fr in all_frames:
+                try:
+                    # Look for qty input field (means modal opened)
+                    el = (await fr.query_selector('input[id^="Ds_1"]')
+                          or await fr.query_selector('input.DocControlQuantity')
+                          or await fr.query_selector('[role="dialog"]')
+                          or await fr.query_selector('[class*="modal"]'))
+                    if el:
+                        logger.info("    [AddItem] Verified: modal/qty input appeared after click")
+                        return True
+                except Exception:
+                    continue
+            return False
+
         try:
             result = await asyncio.wait_for(try_click(), timeout=8.0)
         except asyncio.TimeoutError:
@@ -529,8 +550,55 @@ class WebAutomationBot:
             result = False
 
         if result:
-            await asyncio.sleep(0.5)
-        return result
+            # Verify the click actually opened a modal
+            verified = await _verify_click_worked()
+            if not verified:
+                logger.warning("    [AddItem] Click reported success but no modal appeared — retrying with different strategy")
+                # Take a screenshot to debug
+                try:
+                    await self.page.screenshot(path="add_item_click_no_modal.png")
+                except Exception:
+                    pass
+                # Try one more time with JS that walks up to the closest interactive parent
+                all_frames = self._get_search_frames()
+                for ctx in all_frames:
+                    try:
+                        retry_result = await ctx.evaluate("""() => {
+                            const all = document.querySelectorAll('*');
+                            for (const e of all) {
+                                const t = (e.textContent || '').trim();
+                                if (t === 'Add Item' && e.offsetParent) {
+                                    // Walk up the DOM to find the real clickable parent
+                                    let target = e;
+                                    for (let i = 0; i < 5; i++) {
+                                        if (!target.parentElement) break;
+                                        target = target.parentElement;
+                                        if (target.tagName === 'A' || target.tagName === 'TD' ||
+                                            target.onclick || target.getAttribute('data-event') ||
+                                            target.getAttribute('role') === 'button') {
+                                            break;
+                                        }
+                                    }
+                                    // Fire full mouse event sequence on the interactive parent
+                                    ['mouseenter', 'mouseover', 'mousedown', 'mouseup', 'click'].forEach(evt => {
+                                        target.dispatchEvent(new MouseEvent(evt, {bubbles: true, cancelable: true, view: window}));
+                                    });
+                                    return 'retried on: ' + target.tagName + '#' + (target.id || '') + '.' + (target.className || '');
+                                }
+                            }
+                            return '';
+                        }""")
+                        if retry_result:
+                            logger.info(f"    [AddItem] Retry click: {retry_result}")
+                            verified = await _verify_click_worked()
+                            if verified:
+                                return True
+                    except Exception:
+                        continue
+                # Even if not verified, return True so the flow continues to try entering qty
+                logger.warning("    [AddItem] Could not verify modal — proceeding anyway")
+            return True
+        return False
 
     async def _check_item_availability(self, item_number: int) -> dict:
         """Check if an item is available and return availability info.
