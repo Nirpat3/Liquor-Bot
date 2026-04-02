@@ -630,9 +630,11 @@ class WebAutomationBot:
             t0 = time.time()
             await search_input.press('Enter')
             try:
-                await self.page.wait_for_load_state('networkidle', timeout=1000)
+                await self.page.wait_for_load_state('networkidle', timeout=5000)
             except Exception:
                 pass
+            # Extra settle time for Glide/ServiceNow to render results
+            await asyncio.sleep(0.5)
             trace['steps']['search_wait'] = round((time.time() - t0) * 1000)
 
             # Quick availability check BEFORE trying to click Add Item
@@ -674,8 +676,41 @@ class WebAutomationBot:
             # Click Add Item button — pass the frame where we found availability
             try:
                 t0 = time.time()
-                # Brief pause for page to settle after availability check
-                await asyncio.sleep(0.3)
+
+                # Wait for Add Item button to be visible and ready before clicking
+                add_btn_ready = False
+                target_frame = found_frame or self._content_frame or self.page
+                for wait_sel in ADD_ITEM_SELECTORS:
+                    try:
+                        loc = target_frame.locator(wait_sel).first
+                        await loc.wait_for(state='visible', timeout=3000)
+                        add_btn_ready = True
+                        logger.info(f"    Add Item button ready via '{wait_sel}'")
+                        break
+                    except Exception:
+                        continue
+
+                if not add_btn_ready:
+                    # Also check other frames
+                    for fr in self.page.frames:
+                        if fr == target_frame:
+                            continue
+                        for wait_sel in ADD_ITEM_SELECTORS:
+                            try:
+                                loc = fr.locator(wait_sel).first
+                                await loc.wait_for(state='visible', timeout=1000)
+                                add_btn_ready = True
+                                found_frame = fr  # Update hint frame
+                                logger.info(f"    Add Item button found in different frame via '{wait_sel}'")
+                                break
+                            except Exception:
+                                continue
+                        if add_btn_ready:
+                            break
+
+                if not add_btn_ready:
+                    logger.warning(f"    Add Item button never became visible — trying click anyway")
+
                 add_clicked = await self._click_add_item(hint_frame=found_frame)
                 if not add_clicked:
                     # Take screenshot and dump page HTML for debugging
