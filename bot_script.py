@@ -507,8 +507,10 @@ class WebAutomationBot:
 
             # check if Add Item button appears (indicates item is available)
             try:
+                logger.info(f"  [STEP 1] Looking for Add Item button...")
                 add_item_visible = None
                 search_frames = ([self._content_frame] if self._content_frame else []) + [self.page] + list(self.page.frames)
+                logger.info(f"  [STEP 1] Searching {len(search_frames)} frames...")
                 for frame in search_frames:
                     if not frame:
                         continue
@@ -516,51 +518,54 @@ class WebAutomationBot:
                         try:
                             add_item_visible = await frame.wait_for_selector(sel, timeout=2000)
                             if add_item_visible:
+                                logger.info(f"  [STEP 1] Found Add Item via '{sel}'")
                                 break
                         except Exception:
                             continue
                     if add_item_visible:
                         break
                 if not add_item_visible:
-                    raise Exception("Add Item button not found")
+                    raise Exception("Add Item button not found after checking all frames/selectors")
                 ctx = self._content_frame if self._content_frame else self.page
                 logger.info(f"  ✓ Item #{item_number} is AVAILABLE!")
-                
+
                 # read available quantity and adjust if needed (use timeout - default is 0 = infinite)
+                logger.info(f"  [STEP 2] Reading available quantity...")
                 try:
                     el = await ctx.wait_for_selector('span[id="fgvt_Dm-m-1"]', timeout=3000)
                     available_text = await el.text_content() or '0'
                     available_quantity = int(available_text.replace(',', ''))
                     logger.info(f"    Available quantity: {available_quantity}")
-                    
+
                     if quantity > available_quantity:
                         adjusted_quantity = max(1, int(available_quantity * 0.7))
                         logger.info(f"    Adjusting quantity from {quantity} to {adjusted_quantity} (70% of available)")
                         quantity = adjusted_quantity
                     else:
                         logger.info(f"    Using requested quantity: {quantity}")
-                        
+
                 except Exception:
                     logger.warning(f"    Could not read available quantity, using requested: {quantity}")
-                
+
                 # click Add Item button
+                logger.info(f"  [STEP 3] Clicking Add Item button...")
                 add_clicked = await self._click_add_item()
                 if add_clicked:
-                    logger.info("    Add Item clicked, waiting for quantity modal...")
+                    logger.info("  [STEP 3] ✓ Add Item clicked successfully, waiting for quantity modal...")
                 if not add_clicked:
                     await self.page.screenshot(path="add_item_fail.png")
                     html_snippet = await ctx.evaluate("""() => {
                         const spans = document.querySelectorAll('span');
                         return Array.from(spans).filter(s => s.textContent && s.textContent.includes('Add')).slice(0,10).map(s => ({text: s.textContent.trim().substring(0,50), tag: s.tagName})).join('|');
                     }""")
-                    logger.error(f"Add Item elements: {html_snippet}")
+                    logger.error(f"  [STEP 3] FAILED - Add Item elements on page: {html_snippet}")
                     raise Exception("Failed to click Add Item - see add_item_fail.png")
                 await self.page.wait_for_load_state('networkidle')
                 await asyncio.sleep(0.4)  # wait for quantity modal to open
-                
+
                 # Type quantity into modal (use adjusted qty if we capped by available), then click Add Item
                 qty_str = str(int(quantity))
-                logger.info(f"    Entering quantity {qty_str} from CSV for item #{item_number}")
+                logger.info(f"  [STEP 4] Entering quantity {qty_str} for item #{item_number}...")
                 done = False
                 all_frames = [self.page] + list(self.page.frames)
                 for frame in all_frames:
@@ -589,11 +594,12 @@ class WebAutomationBot:
                         }}""")
                         if result:
                             done = True
-                            logger.info(f"    Entered quantity {qty_str} and clicked Add Item")
+                            logger.info(f"  [STEP 4] ✓ Entered quantity {qty_str} and clicked Add Item in modal")
                             break
                     except Exception:
                         continue
                 if not done:
+                    logger.info(f"  [STEP 4] JS method failed, trying Playwright method...")
                     # Playwright: find quantity input by exact id/class
                     for frame in all_frames:
                         try:
@@ -607,23 +613,26 @@ class WebAutomationBot:
                                 if add_btn:
                                     await add_btn.click()
                                     done = True
-                                    logger.info(f"    Entered quantity {qty_str} and clicked Add Item")
+                                    logger.info(f"  [STEP 4] ✓ Entered quantity {qty_str} via Playwright method")
                                     break
                         except Exception:
                             continue
                 if not done:
-                    raise Exception("Could not enter quantity and click Add Item")
+                    await self.page.screenshot(path="qty_modal_fail.png")
+                    raise Exception("Could not enter quantity — see qty_modal_fail.png")
                 await self.page.wait_for_load_state('networkidle')
                 await asyncio.sleep(0.2)  # wait for modal to close
-                
+
                 # mark item as processed
                 item['order_filled'] = 'yes'
                 items_found.append(item)
                 total_qty_added += quantity
-                logger.info(f"    ✓ Added to cart: {quantity} units (total: {total_qty_added})")
-                
+                logger.info(f"  [STEP 5] ✓ Added to cart: {quantity} units (total: {total_qty_added})")
+
             except Exception as e:
-                logger.error(f"  ✗ Item #{item_number} failed: {e}", exc_info=True)
+                logger.error(f"  ✗ Item #{item_number} FAILED at: {e}")
+                await self.page.screenshot(path=f"item_{item_number}_fail.png")
+                logger.error(f"    Screenshot saved: item_{item_number}_fail.png")
                 try:
                     search_input = await self._get_search_input()
                     await search_input.click()
