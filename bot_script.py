@@ -486,17 +486,8 @@ class WebAutomationBot:
         except Exception:
             pass
 
-        # Check if Add Item button is visible (indicates item exists and is available)
-        for frame in self._get_search_frames():
-            for sel in ADD_ITEM_SELECTORS:
-                try:
-                    el = await frame.query_selector(sel)
-                    if el:
-                        return {'available': True, 'quantity': -1, 'reason': ''}
-                except Exception:
-                    continue
-
-        return {'available': False, 'quantity': 0, 'reason': 'item not found or unavailable'}
+        # Could not find qty element — item not loaded or doesn't exist
+        return {'available': False, 'quantity': 0, 'reason': 'qty element not found'}
 
     def _get_search_frames(self):
         """Get frames to search in priority order."""
