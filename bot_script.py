@@ -172,6 +172,7 @@ class WebAutomationBot:
 
         self.browser = await self.playwright.chromium.launch(
             headless=self.headless,
+            channel='chrome',
             slow_mo=0,
             args=['--start-maximized']
         )
