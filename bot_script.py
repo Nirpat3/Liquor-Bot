@@ -463,17 +463,30 @@ class WebAutomationBot:
         Skips items with order_filled='yes' so ordered items are never re-ordered."""
         items_found = []
         total_qty_added = 0
-        
+        self.trace_log = getattr(self, 'trace_log', [])
+
         for item in items:
             item_number = item['item_number']
             quantity = int(item['quantity'])
-            
+
             # skip if already ordered (order_filled persisted to CSV on successful submit)
             if item.get('order_filled', '').lower() == 'yes':
                 continue
-            
+
+            # skip backorder items (will be picked up in next cycle)
+            if item.get('order_filled', '').lower() == 'backorder':
+                continue
+
+            t_item_start = time.time()
+            trace = {'item': item_number, 'steps': {}, 'result': '', 'total_ms': 0}
+
+            # Human-like delay between searches (1-3s random)
+            import random
+            delay = random.uniform(1.0, 3.0)
+            logger.info(f"Checking item #{item_number} (requested qty: {quantity})... (waiting {delay:.1f}s)")
+            await asyncio.sleep(delay)
+
             # enter item number - click, clear, type (type() triggers proper input events)
-            logger.info(f"Checking item #{item_number}...")
             search_input = await self._get_search_input()
             await search_input.click()
             await search_input.fill('')
@@ -485,10 +498,10 @@ class WebAutomationBot:
 
             # STEP 1: Read available qty FIRST — skip immediately if 0
             try:
-                import random
                 ctx = self._content_frame if self._content_frame else self.page
 
                 logger.info(f"  [STEP 1] Reading available qty for item #{item_number}...")
+                t0 = time.time()
                 available_quantity = -1
                 try:
                     el = await ctx.wait_for_selector('span[id="fgvt_Dm-m-1"]', timeout=3000)
@@ -498,20 +511,26 @@ class WebAutomationBot:
                 except Exception:
                     logger.warning(f"  [STEP 1] Could not read qty via fgvt_Dm-m-1")
 
+                trace['steps']['read_qty'] = round((time.time() - t0) * 1000)
+
                 # If qty is 0, skip — don't waste 15s trying to click inactive Add Item
                 if available_quantity == 0:
                     delay = random.uniform(1.0, 3.0)
                     logger.info(f"  x Item #{item_number} — available qty is 0, skipping (waiting {delay:.1f}s)")
                     await asyncio.sleep(delay)
+                    trace['result'] = 'SKIP (qty 0)'
+                    trace['total_ms'] = round((time.time() - t_item_start) * 1000)
+                    self.trace_log.append(trace)
                     raise Exception("Available quantity is 0")
 
                 # If qty > 0, adjust order qty if needed
+                backorder_qty = 0
                 if available_quantity > 0:
                     logger.info(f"  ✓ Item #{item_number} is AVAILABLE! (qty: {available_quantity})")
                     if quantity > available_quantity:
-                        adjusted_quantity = max(1, int(available_quantity * 0.7))
-                        logger.info(f"    Adjusting quantity from {quantity} to {adjusted_quantity} (70% of available)")
-                        quantity = adjusted_quantity
+                        backorder_qty = quantity - available_quantity
+                        logger.info(f"    Ordering {available_quantity} of {quantity} requested ({backorder_qty} → backorder)")
+                        quantity = available_quantity
                     else:
                         logger.info(f"    Using requested quantity: {quantity}")
                 else:
@@ -610,14 +629,36 @@ class WebAutomationBot:
 
                 # mark item as processed
                 item['order_filled'] = 'yes'
+                item['quantity'] = quantity  # update to actual ordered qty
                 items_found.append(item)
                 total_qty_added += quantity
-                logger.info(f"  [STEP 4] ✓ Added to cart: {quantity} units (total: {total_qty_added})")
+
+                # create backorder entry for remaining qty
+                if backorder_qty > 0:
+                    backorder_item = {
+                        'item_number': item_number,
+                        'quantity': backorder_qty,
+                        'order_filled': 'backorder'
+                    }
+                    items.append(backorder_item)
+                    logger.info(f"    + Backorder created: {backorder_qty} units for item #{item_number}")
+
+                trace['result'] = f"ADDED {quantity} units" + (f" (+{backorder_qty} backorder)" if backorder_qty > 0 else "")
+                trace['total_ms'] = round((time.time() - t_item_start) * 1000)
+                self.trace_log.append(trace)
+                logger.info(f"  [STEP 4] ✓ Added to cart: {quantity} units (total: {total_qty_added}) [{trace['total_ms']}ms]")
 
             except Exception as e:
                 logger.error(f"  ✗ Item #{item_number} FAILED at: {e}")
-                await self.page.screenshot(path=f"item_{item_number}_fail.png")
-                logger.error(f"    Screenshot saved: item_{item_number}_fail.png")
+                if 'SKIP' not in trace.get('result', ''):
+                    trace['result'] = f"FAILED: {e}"
+                    trace['total_ms'] = round((time.time() - t_item_start) * 1000)
+                    self.trace_log.append(trace)
+                try:
+                    await self.page.screenshot(path=f"item_{item_number}_fail.png")
+                    logger.error(f"    Screenshot saved: item_{item_number}_fail.png")
+                except Exception:
+                    pass
                 try:
                     search_input = await self._get_search_input()
                     await search_input.click()
