@@ -60,7 +60,7 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MS DOR Order Bot</title>
+    <title>MS DOR Order</title>
     <style>
         :root {
             --bg-primary: #0f1117;
@@ -537,7 +537,7 @@ HTML_TEMPLATE = '''
     <header class="app-header">
         <div class="app-title">
             <div class="logo">B</div>
-            MS DOR Order Bot
+            MS DOR Order
         </div>
         <div style="display:flex; align-items:center; gap:12px;">
             <div id="header-status" class="status-pill stopped">
@@ -650,7 +650,7 @@ HTML_TEMPLATE = '''
         <!-- Settings Tab -->
         <div id="settings" class="tab-content">
             <div class="card">
-                <div class="card-title">Login Credentials</div>
+                <div class="card-title">DOR Login Credentials</div>
                 <div class="input-row">
                     <label>Username</label>
                     <input type="text" id="username" placeholder="Enter username">
@@ -667,16 +667,41 @@ HTML_TEMPLATE = '''
                     <input type="checkbox" id="headless">
                     Run in background (headless mode)
                 </label>
-                <button class="btn btn-primary" onclick="saveSettings()" style="margin-top:8px;">Save Settings</button>
+            </div>
+            <div class="card">
+                <div class="card-title">RapidRMS API (Sales Intelligence)</div>
+                <div class="input-row">
+                    <label>Client ID</label>
+                    <input type="text" id="rapidrms_client_id" placeholder="RapidRMS client ID">
+                </div>
+                <div class="input-row">
+                    <label>Username</label>
+                    <input type="text" id="rapidrms_username" placeholder="RapidRMS username">
+                </div>
+                <div class="input-row">
+                    <label>Password</label>
+                    <input type="password" id="rapidrms_password" placeholder="RapidRMS password">
+                </div>
+                <div class="input-row">
+                    <label>Source/DB</label>
+                    <input type="text" id="rapidrms_source" placeholder="RapidRMS (default)">
+                </div>
+                <div id="rapidrms-status" style="margin-top:8px; font-size:13px; color:var(--text-muted);"></div>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <button class="btn btn-ghost btn-sm" onclick="testRapidRMSConnection()">Test Connection</button>
+                </div>
+            </div>
+            <div style="margin-top:12px;">
+                <button class="btn btn-primary" onclick="saveSettings()">Save All Settings</button>
             </div>
             <div class="instructions">
                 <div class="card-title">Getting Started</div>
                 <ol>
                     <li>Enter your DOR login credentials above and save</li>
+                    <li>Enter RapidRMS credentials to enable the <strong>Sales Intelligence</strong> tab</li>
                     <li>Add items to the order queue in the <strong>Orders</strong> tab</li>
                     <li>Go to <strong>Control</strong> and press the power button to start</li>
                     <li>For first-time use, complete 2FA manually in the browser window</li>
-                    <li>The bot runs continuously until you stop it</li>
                 </ol>
             </div>
         </div>
@@ -794,70 +819,45 @@ HTML_TEMPLATE = '''
         <!-- Sales Intelligence Tab -->
         <div id="salesintel" class="tab-content">
             <div class="card">
-                <div class="card-title">Sales Intelligence</div>
-                <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
-                    Analyze sales history from RapidRMS or CortexDB. Generate orders based on velocity and upcoming promotions.
-                </p>
-                <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:16px;">
-                    <div>
-                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Time Frame</label>
-                        <select id="si-timeframe" style="background:var(--bg-input); border:1px solid var(--border); color:var(--text-primary); padding:10px 14px; border-radius:var(--radius-sm); font-size:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <div class="card-title" style="margin-bottom:0">Sales Intelligence</div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select id="si-timeframe" onchange="loadSalesData()" style="background:var(--bg-input); border:1px solid var(--border); color:var(--text-primary); padding:8px 12px; border-radius:var(--radius-sm); font-size:13px;">
                             <option value="1w">Last 1 Week</option>
-                            <option value="2w">Last 2 Weeks</option>
+                            <option value="2w" selected>Last 2 Weeks</option>
                             <option value="wtd">Week to Date</option>
-                            <option value="mtd" selected>Month to Date</option>
+                            <option value="mtd">Month to Date</option>
                             <option value="lm">Last Month</option>
                             <option value="qtd">Quarter to Date</option>
                             <option value="lq">Last Quarter</option>
                             <option value="ytd">Year to Date</option>
                             <option value="ly">Last Year</option>
                         </select>
-                    </div>
-                    <div>
-                        <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Data Source</label>
-                        <select id="si-datasource" style="background:var(--bg-input); border:1px solid var(--border); color:var(--text-primary); padding:10px 14px; border-radius:var(--radius-sm); font-size:14px;">
-                            <option value="direct">RapidRMS API (Direct)</option>
-                            <option value="cortex">CortexDB (Cached)</option>
+                        <select id="si-datasource" onchange="loadSalesData()" style="background:var(--bg-input); border:1px solid var(--border); color:var(--text-primary); padding:8px 12px; border-radius:var(--radius-sm); font-size:13px;">
+                            <option value="direct">RapidRMS API</option>
+                            <option value="cortex">CortexDB</option>
                         </select>
-                    </div>
-                    <button class="btn btn-primary" onclick="loadSalesData()">Fetch Sales</button>
-                    <button class="btn btn-success" onclick="generateOrder()">Generate Order</button>
-                    <button class="btn btn-ghost" onclick="aiRecommend()" style="border-color:var(--accent); color:var(--accent);">AI Recommend</button>
-                </div>
-                <div id="si-status" style="margin-bottom:10px; font-weight:600; color:var(--text-secondary);"></div>
-                <div id="si-ai-panel" style="display:none; margin-bottom:16px;" class="card" >
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                        <div class="card-title" style="margin-bottom:0; color:var(--accent);">AI Recommendation</div>
-                        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('si-ai-panel').style.display='none'">&times; Close</button>
-                    </div>
-                    <div id="si-ai-content" style="font-size:14px; line-height:1.7; color:var(--text-secondary); white-space:pre-wrap;"></div>
-                    <div id="si-ai-items" style="margin-top:12px;"></div>
-                </div>
-            </div>
-            <div class="card">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                    <div class="card-title" style="margin-bottom:0">Sales Data</div>
-                    <div class="btn-group" style="margin-bottom:0">
                         <button class="btn btn-ghost btn-sm" onclick="loadSalesData()">Refresh</button>
-                        <button class="btn btn-success btn-sm" onclick="pushSelectedToQueue()">Push Selected to Queue</button>
                     </div>
                 </div>
+                <div id="si-status" style="margin-bottom:8px; font-size:13px; color:var(--text-secondary);"></div>
                 <input type="text" id="si-filter" placeholder="Filter by item # or name..." oninput="filterSalesResults()" style="width:100%; max-width:400px; margin-bottom:12px;">
                 <div style="overflow-x:auto;">
                     <table id="si-table" style="display:none;">
                         <thead>
                             <tr>
-                                <th><input type="checkbox" id="si-select-all" onchange="toggleAllSales(this)"></th>
-                                <th onclick="sortSales('item_number')">Item #</th>
-                                <th onclick="sortSales('name')">Name</th>
-                                <th onclick="sortSales('units_sold')">Units Sold</th>
+                                <th onclick="sortSales('item_number')">POS Item #</th>
+                                <th onclick="sortSales('name')">POS Name</th>
+                                <th onclick="sortSales('dor_item_num')">DOR Item #</th>
+                                <th>DOR Name</th>
+                                <th>Match</th>
+                                <th onclick="sortSales('units_sold')">Sold</th>
                                 <th onclick="sortSales('revenue')">Revenue</th>
-                                <th onclick="sortSales('avg_qty')">Avg Qty/Txn</th>
-                                <th onclick="sortSales('velocity')">Velocity/Day</th>
+                                <th onclick="sortSales('velocity')">Vel/Day</th>
                                 <th>Trend</th>
                                 <th>SPA</th>
-                                <th>Suggested Qty</th>
-                                <th style="width:70px">Action</th>
+                                <th style="width:90px">Order Qty</th>
+                                <th style="width:70px"></th>
                             </tr>
                         </thead>
                         <tbody></tbody>
@@ -895,7 +895,7 @@ HTML_TEMPLATE = '''
             if (tabName === 'orders') { loadOrders(); ordersInterval = setInterval(loadOrders, 5000); }
             if (tabName === 'orderdata') loadOrderFiles();
             if (tabName === 'specialorders') loadSpecialOrders();
-            if (tabName === 'salesintel') { /* load on demand via Fetch Sales button */ }
+            if (tabName === 'salesintel' && !salesLoaded) loadSalesData();
         }
 
         // ── SSE log streaming ──
@@ -929,7 +929,11 @@ HTML_TEMPLATE = '''
                     username: document.getElementById('username').value,
                     password: document.getElementById('password').value,
                     url: document.getElementById('url').value,
-                    headless: document.getElementById('headless').checked
+                    headless: document.getElementById('headless').checked,
+                    RAPIDRMS_CLIENT_ID: document.getElementById('rapidrms_client_id').value,
+                    RAPIDRMS_USERNAME: document.getElementById('rapidrms_username').value,
+                    RAPIDRMS_PASSWORD: document.getElementById('rapidrms_password').value,
+                    RAPIDRMS_SOURCE: document.getElementById('rapidrms_source').value
                 })
             }).then(() => { toast('Settings saved successfully', 'success'); loadSettings(); });
         }
@@ -940,7 +944,32 @@ HTML_TEMPLATE = '''
                 document.getElementById('password').value = data.password || '';
                 document.getElementById('url').value = data.url || 'https://tap.dor.ms.gov/';
                 document.getElementById('headless').checked = data.headless || false;
+                document.getElementById('rapidrms_client_id').value = data.rapidrms_client_id || '';
+                document.getElementById('rapidrms_username').value = data.rapidrms_username || '';
+                document.getElementById('rapidrms_password').value = data.rapidrms_password || '';
+                document.getElementById('rapidrms_source').value = data.rapidrms_source || '';
             });
+        }
+
+        function testRapidRMSConnection() {
+            const statusEl = document.getElementById('rapidrms-status');
+            statusEl.textContent = 'Testing connection...';
+            statusEl.style.color = 'var(--text-muted)';
+            // Save first so backend has latest creds
+            saveSettings();
+            setTimeout(() => {
+                fetch('/rapidrms/test').then(r => r.json()).then(data => {
+                    if (data.connected) {
+                        statusEl.textContent = 'Connected successfully';
+                        statusEl.style.color = 'var(--success)';
+                        toast('RapidRMS connected', 'success');
+                    } else {
+                        statusEl.textContent = 'Failed: ' + (data.error || 'Unknown error');
+                        statusEl.style.color = 'var(--danger)';
+                        toast('Connection failed', 'error');
+                    }
+                }).catch(() => { statusEl.textContent = 'Connection error'; statusEl.style.color = 'var(--danger)'; });
+            }, 500);
         }
 
         // ── Orders ──
@@ -1233,6 +1262,7 @@ HTML_TEMPLATE = '''
         let salesData = [];
         let salesSortKey = 'units_sold';
         let salesSortAsc = false;
+        let salesLoaded = false;
 
         function loadSalesData() {
             const timeframe = document.getElementById('si-timeframe').value;
@@ -1243,11 +1273,12 @@ HTML_TEMPLATE = '''
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({timeframe, datasource})
             }).then(r => r.json()).then(data => {
-                if (data.error) { toast(data.error, 'error'); document.getElementById('si-status').textContent = 'Error: ' + data.error; return; }
+                if (data.error) { toast(data.error, 'error'); document.getElementById('si-status').textContent = data.error; return; }
                 salesData = data.items || [];
-                document.getElementById('si-status').textContent = `Loaded ${salesData.length} items (${data.source || datasource})`;
+                salesLoaded = true;
+                const tf = document.getElementById('si-timeframe').selectedOptions[0].text;
+                document.getElementById('si-status').textContent = `${salesData.length} items | ${tf} | ${data.from_date} - ${data.to_date}`;
                 renderSalesResults();
-                toast(`${salesData.length} items loaded`, 'success');
             }).catch(err => { document.getElementById('si-status').textContent = 'Error: ' + err; toast('Failed to load sales', 'error'); });
         }
 
@@ -1256,28 +1287,68 @@ HTML_TEMPLATE = '''
             const raw = document.getElementById('si-filter').value.trim().toLowerCase();
             let items = salesData;
             if (raw) {
-                items = items.filter(i => i.item_number.toLowerCase().includes(raw) || (i.name||'').toLowerCase().includes(raw));
+                items = items.filter(i =>
+                    i.item_number.toLowerCase().includes(raw) ||
+                    (i.name||'').toLowerCase().includes(raw) ||
+                    (i.dor_item_num||'').toLowerCase().includes(raw) ||
+                    (i.dor_name||'').toLowerCase().includes(raw)
+                );
             }
             const tbody = table.querySelector('tbody');
             tbody.innerHTML = items.map((item, idx) => {
                 const hasSpa = item.spa_info && item.spa_info !== '';
-                const trendIcon = item.trend === 'up' ? '<span style="color:var(--success)">&#9650;</span>' : item.trend === 'down' ? '<span style="color:var(--danger)">&#9660;</span>' : '<span style="color:var(--text-muted)">&#9654;</span>';
+                const trendIcon = item.trend === 'up' ? '<span style="color:var(--success)">&#9650;</span>' : item.trend === 'down' ? '<span style="color:var(--danger)">&#9660;</span>' : '<span style="color:var(--text-muted)">&#8212;</span>';
+                // Match indicator
+                let matchBadge = '';
+                if (item.match_type === 'exact') {
+                    matchBadge = '<span class="badge badge-success" style="font-size:11px;">Exact</span>';
+                } else if (item.match_type === 'fuzzy') {
+                    const pct = Math.round((item.match_score||0)*100);
+                    matchBadge = '<span class="badge badge-warning" style="font-size:11px;">' + pct + '%</span>';
+                } else {
+                    matchBadge = '<span class="badge badge-danger" style="font-size:11px;">No match</span>';
+                }
+                // Use DOR item # for ordering if matched, otherwise POS item #
+                const orderItemNum = item.dor_item_num || item.item_number;
+                const orderName = item.dor_name || item.name || '';
                 return `
-                <tr class="${hasSpa ? 'row-sale' : ''}">
-                    <td><input type="checkbox" class="si-row-cb" data-idx="${idx}"></td>
+                <tr class="${hasSpa ? 'row-sale' : ''}" ${item.match_type === 'none' ? 'style="opacity:0.7"' : ''}>
                     <td style="font-weight:600">${item.item_number}</td>
-                    <td>${item.name || '-'}</td>
+                    <td style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(item.name||'').replace(/"/g,'&quot;')}">${item.name || '-'}</td>
+                    <td style="font-weight:600; color:${item.dor_item_num ? 'var(--accent)' : 'var(--text-muted)'}">${item.dor_item_num || '-'}</td>
+                    <td style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${(item.dor_name||'').replace(/"/g,'&quot;')}">${item.dor_name || '-'}</td>
+                    <td>${matchBadge}</td>
                     <td>${item.units_sold || 0}</td>
                     <td>$${(item.revenue || 0).toFixed(2)}</td>
-                    <td>${(item.avg_qty || 0).toFixed(1)}</td>
                     <td>${(item.velocity || 0).toFixed(2)}</td>
                     <td>${trendIcon}</td>
-                    <td>${hasSpa ? '<span class="badge badge-success">'+item.spa_info+'</span>' : '-'}</td>
-                    <td style="font-weight:600; color:var(--accent)">${item.suggested_qty || '-'}</td>
-                    <td><button class="btn btn-primary btn-sm" onclick="addToBot('${item.item_number}', '${(item.name||'').replace(/'/g,"\\\\'")}', '', '')">+ Bot</button></td>
+                    <td>${hasSpa ? '<span class="badge badge-success" style="font-size:11px;">'+item.spa_info+'</span>' : '-'}</td>
+                    <td><input type="number" id="si-qty-${idx}" value="${item.suggested_qty || ''}" placeholder="Qty" min="1" style="width:70px; padding:5px 8px; background:var(--bg-input); border:1px solid var(--border); color:var(--text-primary); border-radius:var(--radius-sm); font-size:13px; text-align:center;" ${item.match_type === 'none' ? 'disabled title="No DOR match found"' : ''}></td>
+                    <td>${item.match_type !== 'none' ? '<button class="btn btn-success btn-sm" onclick="addSalesItem('+idx+')">Add</button>' : ''}</td>
                 </tr>`;
             }).join('');
             table.style.display = items.length > 0 ? 'table' : 'none';
+        }
+
+        function addSalesItem(idx) {
+            const item = salesData[idx];
+            if (!item) return;
+            const qtyInput = document.getElementById('si-qty-' + idx);
+            const qty = qtyInput ? qtyInput.value.trim() : '';
+            if (!qty || isNaN(qty) || parseInt(qty) <= 0) { toast('Enter a valid quantity', 'error'); return; }
+            // Use DOR item # if matched, otherwise POS item #
+            const orderNum = item.dor_item_num || item.item_number;
+            const orderName = item.dor_name || item.name || '';
+            const orderSize = item.size || '';
+            fetch('/add_item', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({item_number: orderNum, name: orderName, size: orderSize, quantity: qty})
+            }).then(() => {
+                const matchNote = item.match_type === 'fuzzy' ? ' (fuzzy match)' : '';
+                toast(`DOR #${orderNum} "${orderName}" qty:${qty} added${matchNote}`, 'success');
+                if (qtyInput) { qtyInput.style.borderColor = 'var(--success)'; setTimeout(() => qtyInput.style.borderColor = '', 1500); }
+            });
         }
 
         function filterSalesResults() { renderSalesResults(); }
@@ -1293,73 +1364,6 @@ HTML_TEMPLATE = '''
                 return 0;
             });
             renderSalesResults();
-        }
-
-        function toggleAllSales(cb) {
-            document.querySelectorAll('.si-row-cb').forEach(c => c.checked = cb.checked);
-        }
-
-        function generateOrder() {
-            const timeframe = document.getElementById('si-timeframe').value;
-            const datasource = document.getElementById('si-datasource').value;
-            document.getElementById('si-status').textContent = 'Generating order...';
-            fetch('/generate_order', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({timeframe, datasource, items: salesData})
-            }).then(r => r.json()).then(data => {
-                if (data.error) { toast(data.error, 'error'); return; }
-                salesData = data.items || salesData;
-                document.getElementById('si-status').textContent = `Order generated: ${data.total_items} items, ${data.total_qty} units`;
-                renderSalesResults();
-                toast('Order generated based on velocity', 'success');
-            }).catch(err => toast('Generate failed: ' + err, 'error'));
-        }
-
-        function aiRecommend() {
-            const timeframe = document.getElementById('si-timeframe').value;
-            const datasource = document.getElementById('si-datasource').value;
-            document.getElementById('si-status').textContent = 'Asking Shre AI...';
-            document.getElementById('si-ai-panel').style.display = 'none';
-            fetch('/ai_recommend', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({timeframe, datasource, items: salesData.slice(0, 50)})
-            }).then(r => r.json()).then(data => {
-                if (data.error) { toast(data.error, 'error'); document.getElementById('si-status').textContent = 'AI error: ' + data.error; return; }
-                document.getElementById('si-ai-panel').style.display = 'block';
-                document.getElementById('si-ai-content').textContent = data.recommendation || 'No recommendation returned.';
-                if (data.suggested_items && data.suggested_items.length > 0) {
-                    document.getElementById('si-ai-items').innerHTML = '<div class="card-title" style="margin-top:8px;">Suggested Items</div>' +
-                        data.suggested_items.map(si => `<div style="display:flex; gap:12px; padding:4px 0; font-size:13px;">
-                            <span style="font-weight:600; min-width:60px;">#${si.item_number}</span>
-                            <span style="flex:1">${si.name||''}</span>
-                            <span style="color:var(--accent); font-weight:600;">Qty: ${si.qty}</span>
-                            <button class="btn btn-primary btn-sm" onclick="addToBot('${si.item_number}', '${(si.name||'').replace(/'/g,"\\\\'")}', '', '')" style="padding:2px 8px;">+ Bot</button>
-                        </div>`).join('');
-                }
-                document.getElementById('si-status').textContent = 'AI recommendation received';
-                toast('AI recommendation ready', 'success');
-            }).catch(err => { toast('AI request failed: ' + err, 'error'); document.getElementById('si-status').textContent = 'AI error'; });
-        }
-
-        function pushSelectedToQueue() {
-            const checked = document.querySelectorAll('.si-row-cb:checked');
-            if (checked.length === 0) { toast('Select items to push', 'error'); return; }
-            let pushed = 0;
-            checked.forEach(cb => {
-                const idx = parseInt(cb.dataset.idx);
-                const item = salesData[idx];
-                if (!item) return;
-                const qty = item.suggested_qty || Math.max(1, Math.ceil(item.velocity * 14));
-                fetch('/add_item', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({item_number: item.item_number, name: item.name||'', size: '', quantity: String(qty)})
-                });
-                pushed++;
-            });
-            toast(`${pushed} items pushed to order queue`, 'success');
         }
 
         // ── Periodic status check ──
@@ -1447,8 +1451,20 @@ def get_settings():
         'username': os.getenv('SITE_USERNAME', ''),
         'password': os.getenv('SITE_PASSWORD', ''),
         'url': os.getenv('SITE_URL', 'https://tap.dor.ms.gov/'),
-        'headless': os.getenv('HEADLESS', 'False').lower() == 'true'
+        'headless': os.getenv('HEADLESS', 'False').lower() == 'true',
+        'rapidrms_client_id': os.getenv('RAPIDRMS_CLIENT_ID', ''),
+        'rapidrms_username': os.getenv('RAPIDRMS_USERNAME', ''),
+        'rapidrms_password': os.getenv('RAPIDRMS_PASSWORD', ''),
+        'rapidrms_source': os.getenv('RAPIDRMS_SOURCE', ''),
     })
+
+
+@app.route('/rapidrms/test')
+def rapidrms_test():
+    token, err = _rapidrms_auth()
+    if err:
+        return jsonify({'connected': False, 'error': err})
+    return jsonify({'connected': True, 'db_name': _rapidrms_token.get('db_name', '')})
 
 @app.route('/get_orders')
 def get_orders():
@@ -1948,6 +1964,129 @@ RAPIDRMS_BASE_URL = 'https://rapidrmsapi.azurewebsites.net'
 _rapidrms_token = {'token': None, 'expires': None, 'db_name': None}
 
 
+def _normalize_desc(text):
+    """Normalize a product description for matching."""
+    if not text:
+        return ''
+    t = text.lower().strip()
+    # Remove common noise words and punctuation
+    for ch in [',', '.', '(', ')', '-', '/', "'", '"', '&']:
+        t = t.replace(ch, ' ')
+    # Normalize size terms
+    t = re.sub(r'\b(\d+)\s*(ml|oz|lt?r?|pk|pack)\b', r'\1\2', t)
+    return ' '.join(t.split())
+
+
+def _tokenize(text):
+    """Split normalized text into a set of tokens."""
+    return set(_normalize_desc(text).split())
+
+
+def _fuzzy_score(desc_a, desc_b):
+    """Token-based similarity score between two descriptions. Returns 0.0-1.0."""
+    tokens_a = _tokenize(desc_a)
+    tokens_b = _tokenize(desc_b)
+    if not tokens_a or not tokens_b:
+        return 0.0
+    intersection = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return len(intersection) / len(union)
+
+
+def _build_dor_catalog():
+    """Build a catalog of DOR items from CurrentPrices + Order Data files for matching."""
+    catalog = {}  # item_num -> {name, size, units, ...}
+
+    # CurrentPrices is the best source
+    prices = _load_current_prices()
+    for item_num, info in prices.items():
+        catalog[item_num] = {
+            'dor_item_num': item_num,
+            'dor_name': info.get('name', ''),
+            'size': info.get('size', ''),
+            'units': info.get('units', ''),
+            'available': info.get('available', ''),
+            'case_cost': info.get('case_cost', ''),
+        }
+
+    # Also pull from recent order data files
+    if ORDER_DATA_DIR.exists():
+        for f in sorted(ORDER_DATA_DIR.iterdir()):
+            if f.suffix.lower() == '.ods':
+                try:
+                    _, rows = read_ods_file(f)
+                    for row in rows:
+                        num = row.get('item_num', '').strip()
+                        if num and num not in catalog:
+                            catalog[num] = {
+                                'dor_item_num': num,
+                                'dor_name': row.get('name', ''),
+                                'size': '',
+                                'units': row.get('units', ''),
+                                'available': '',
+                                'case_cost': '',
+                            }
+                except Exception:
+                    continue
+
+    return catalog
+
+
+def _match_items_to_dor(sales_items):
+    """Match sales items (from RapidRMS) to DOR catalog items.
+
+    Strategy:
+      1. Exact item # match
+      2. Fuzzy description match (best score >= 0.4 threshold)
+    """
+    catalog = _build_dor_catalog()
+    # Pre-build description index for fuzzy matching
+    desc_index = []  # [(item_num, normalized_name, info)]
+    for num, info in catalog.items():
+        desc_index.append((num, _normalize_desc(info['dor_name']), info))
+
+    for item in sales_items:
+        rms_num = str(item.get('item_number', '')).strip()
+        rms_name = item.get('name', '')
+
+        # 1) Exact item # match
+        if rms_num in catalog:
+            dor = catalog[rms_num]
+            item['dor_item_num'] = dor['dor_item_num']
+            item['dor_name'] = dor['dor_name']
+            item['match_type'] = 'exact'
+            item['match_score'] = 1.0
+            item['size'] = dor.get('size', '')
+            item['case_cost'] = dor.get('case_cost', '')
+            continue
+
+        # 2) Fuzzy description match
+        best_score = 0.0
+        best_match = None
+        rms_normalized = _normalize_desc(rms_name)
+        if rms_normalized:
+            for dor_num, dor_norm, dor_info in desc_index:
+                score = _fuzzy_score(rms_name, dor_info['dor_name'])
+                if score > best_score:
+                    best_score = score
+                    best_match = dor_info
+
+        if best_match and best_score >= 0.4:
+            item['dor_item_num'] = best_match['dor_item_num']
+            item['dor_name'] = best_match['dor_name']
+            item['match_type'] = 'fuzzy'
+            item['match_score'] = round(best_score, 2)
+            item['size'] = best_match.get('size', '')
+            item['case_cost'] = best_match.get('case_cost', '')
+        else:
+            item['dor_item_num'] = ''
+            item['dor_name'] = ''
+            item['match_type'] = 'none'
+            item['match_score'] = round(best_score, 2) if best_score > 0 else 0.0
+
+    return sales_items
+
+
 def _get_timeframe_dates(timeframe):
     """Convert timeframe code to (from_date, to_date) strings (MM/DD/YYYY)."""
     today = datetime.now()
@@ -2147,6 +2286,9 @@ def _enrich_sales_items(items, from_date, to_date):
             item['spa_info'] = f"{spa.get('spa_date', '')} {spa.get('spa_discount', '')}".strip()
         else:
             item['spa_info'] = ''
+
+    # Match against DOR catalog (exact item # then fuzzy description)
+    items = _match_items_to_dor(items)
 
     items.sort(key=lambda x: x.get('units_sold', 0), reverse=True)
     return items
