@@ -392,7 +392,7 @@ class WebAutomationBot:
                     if await loc.count() == 0:
                         continue
                     await loc.scroll_into_view_if_needed()
-                    await loc.click(force=True, timeout=2000)
+                    await loc.click(force=True, timeout=1000)
                     return True
                 except Exception:
                     continue
@@ -443,9 +443,9 @@ class WebAutomationBot:
             return False
 
         try:
-            result = await asyncio.wait_for(try_click(), timeout=10.0)
+            result = await asyncio.wait_for(try_click(), timeout=5.0)
         except asyncio.TimeoutError:
-            logger.warning("_click_add_item timed out after 10s")
+            logger.warning("_click_add_item timed out after 5s")
             result = False
 
         if result:
@@ -623,11 +623,11 @@ class WebAutomationBot:
                 logger.error(f"  x Item #{item_number} failed: {e}")
                 trace['result'] = f"FAILED: {e}"
                 try:
+                    # Dismiss any open modal/dialog
+                    await self.page.keyboard.press('Escape')
+                    await asyncio.sleep(0.2)
                     search_input = await self._get_search_input()
-                    await search_input.click()
-                    await search_input.press('Control+a')
-                    await search_input.press('Backspace')
-                    await asyncio.sleep(0.1)
+                    await search_input.triple_click()
                 except Exception:
                     pass
 
