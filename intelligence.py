@@ -4,10 +4,17 @@ MS DOR Order Intelligence Engine
 Tracks availability patterns, predicts restock windows, and optimizes
 ordering strategy to maximize fill rates against competing bots.
 
-Data flow:
+Data flow (local):
   bot_script.py → log_scan() → availability_log.csv
   intelligence.py → analyze patterns → predictions + priority queue
   web_gui.py → Intelligence tab → visualize + configure
+
+Data flow (cloud — shre-predict workspace):
+  bot_script.py → log_scan() → POST shre-predict/api/dor/scan
+  shre-predict → CortexDB (per workspace) → pattern analysis
+  web_gui.py → GET shre-predict/api/dor/predictions/:workspace
+
+Local CSV is the fallback; shre-predict is the primary when available.
 """
 
 import csv
@@ -46,21 +53,58 @@ def _ensure_win_log():
 
 # ── Scan Logging ──
 
+def _get_predict_url():
+    """Get shre-predict URL from env, or None if not configured."""
+    url = os.getenv('SHRE_PREDICT_URL', '')
+    return url if url else None
+
+
+def _get_workspace():
+    """Get workspace ID from env."""
+    return os.getenv('DOR_WORKSPACE', 'default')
+
+
+def _sync_to_cloud(endpoint, data):
+    """Non-blocking sync to shre-predict. Fails silently."""
+    url = _get_predict_url()
+    if not url:
+        return
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f'{url}/api/dor/{endpoint}',
+            data=json.dumps(data).encode(),
+            headers={'Content-Type': 'application/json', 'X-Workspace': _get_workspace()},
+            method='POST',
+        )
+        urllib.request.urlopen(req, timeout=3)
+    except Exception:
+        pass  # Cloud sync is best-effort
+
+
 def log_scan(item_number, available_qty, was_available, check_duration_ms=0,
              order_attempted=False, order_success=False):
     """Log a single availability scan result. Called from bot_script.py after every check."""
     _ensure_log_file()
+    scan_data = {
+        'timestamp': datetime.now().isoformat(),
+        'item_number': str(item_number),
+        'available_qty': available_qty,
+        'was_available': was_available,
+        'check_duration_ms': check_duration_ms,
+        'order_attempted': order_attempted,
+        'order_success': order_success,
+    }
     with open(LOG_FILE, 'a', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=LOG_FIELDS)
-        writer.writerow({
-            'timestamp': datetime.now().isoformat(),
-            'item_number': str(item_number),
-            'available_qty': available_qty,
-            'was_available': was_available,
-            'check_duration_ms': check_duration_ms,
-            'order_attempted': order_attempted,
-            'order_success': order_success,
-        })
+        writer.writerow(scan_data)
+
+    # Sync to shre-predict (non-blocking, best-effort)
+    _sync_to_cloud('scan', {
+        **scan_data,
+        'workspace': _get_workspace(),
+        'scanned_at': scan_data['timestamp'],
+    })
 
 
 def log_win(item_number, qty_ordered, qty_available):
@@ -76,6 +120,14 @@ def log_win(item_number, qty_ordered, qty_available):
             'qty_available': qty_available,
             'compete_score': compete_score,
         })
+
+    # Sync to shre-predict
+    _sync_to_cloud('win', {
+        'workspace': _get_workspace(),
+        'item_number': str(item_number),
+        'qty_ordered': qty_ordered,
+        'qty_available': qty_available,
+    })
 
 
 # ── Pattern Analysis ──
