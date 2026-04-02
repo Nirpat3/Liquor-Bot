@@ -386,25 +386,29 @@ class WebAutomationBot:
         raise Exception("Could not find item search input")
 
     async def _click_add_item(self):
-        """Click Add Item button. Tries locator-based, then JS-based approaches."""
+        """Click Add Item button. Tries locator-based, JS-based, then dispatchEvent approaches."""
 
-        async def _try_locator_click(frame):
+        async def _try_locator_click(frame, label=""):
             """Try clicking Add Item via Playwright locators in a given frame."""
             for sel in ADD_ITEM_SELECTORS:
                 try:
                     loc = frame.locator(sel).first
-                    if await loc.count() == 0:
+                    cnt = await loc.count()
+                    if cnt == 0:
                         continue
+                    logger.info(f"    [AddItem] Found '{sel}' in {label} (count={cnt}), clicking...")
                     await loc.scroll_into_view_if_needed()
-                    await loc.click(force=True, timeout=1000)
+                    await loc.click(force=True, timeout=2000)
+                    logger.info(f"    [AddItem] Locator click succeeded via '{sel}' in {label}")
                     return True
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"    [AddItem] Locator '{sel}' in {label} failed: {e}")
                     continue
             return False
 
-        async def _try_js_click(ctx):
+        async def _try_js_click(ctx, label=""):
             """Try clicking Add Item via JavaScript in a given context."""
-            return await ctx.evaluate("""() => {
+            result = await ctx.evaluate("""() => {
                 const all = document.querySelectorAll('span, div, td, button, a');
                 for (const e of all) {
                     const t = e.textContent && e.textContent.trim();
@@ -412,44 +416,91 @@ class WebAutomationBot:
                         const target = e.closest('[data-event]') || e.closest('td') || e.closest('div[role="button"]') || e.parentElement || e;
                         target.scrollIntoView({block: 'center'});
                         target.click();
-                        return true;
+                        return 'clicked: ' + target.tagName + '.' + (target.className || '');
                     }
                 }
-                return false;
+                return '';
             }""")
+            if result:
+                logger.info(f"    [AddItem] JS click succeeded in {label}: {result}")
+                return True
+            return False
+
+        async def _try_dispatch_click(ctx, label=""):
+            """Try clicking Add Item via dispatchEvent (for ServiceNow/Glide buttons)."""
+            result = await ctx.evaluate("""() => {
+                const all = document.querySelectorAll('span, div, td, button, a');
+                for (const e of all) {
+                    const t = e.textContent && e.textContent.trim();
+                    if ((t === 'Add Item' || t.includes('Add Item')) && t.length < 20 && e.offsetParent) {
+                        const target = e.closest('[data-event]') || e.closest('td') || e.closest('div[role="button"]') || e.parentElement || e;
+                        target.scrollIntoView({block: 'center'});
+                        // Try multiple event dispatch methods
+                        target.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+                        target.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+                        target.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                        // Also try the element itself (not just target)
+                        if (target !== e) {
+                            e.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                        }
+                        return 'dispatched: ' + target.tagName + '.' + (target.className || '');
+                    }
+                }
+                return '';
+            }""")
+            if result:
+                logger.info(f"    [AddItem] dispatchEvent click in {label}: {result}")
+                return True
+            return False
 
         async def try_click():
-            # Try content frame first, then main page, then all frames
+            # Build frame list with labels for logging
             frames_to_try = []
             if self._content_frame:
-                frames_to_try.append(self._content_frame)
-            frames_to_try.append(self.page)
-            for fr in self.page.frames:
-                if fr != self.page.main_frame and fr not in frames_to_try:
-                    frames_to_try.append(fr)
+                frames_to_try.append((self._content_frame, "content_frame"))
+            frames_to_try.append((self.page, "main_page"))
+            for i, fr in enumerate(self.page.frames):
+                if fr != self.page.main_frame:
+                    already = any(f[0] == fr for f in frames_to_try)
+                    if not already:
+                        frames_to_try.append((fr, f"frame_{i}"))
 
-            # Locator-based attempts
-            for frame in frames_to_try:
+            logger.info(f"    [AddItem] Searching {len(frames_to_try)} frames...")
+
+            # Wait briefly for button to become interactive after search results load
+            await asyncio.sleep(0.3)
+
+            # Phase 1: Locator-based attempts
+            for frame, label in frames_to_try:
                 try:
-                    if await _try_locator_click(frame):
+                    if await _try_locator_click(frame, label):
                         return True
                 except Exception:
                     continue
 
-            # JS-based attempts
-            for ctx in frames_to_try:
+            # Phase 2: JS-based attempts
+            for ctx, label in frames_to_try:
                 try:
-                    if await _try_js_click(ctx):
+                    if await _try_js_click(ctx, label):
                         return True
                 except Exception:
                     continue
 
+            # Phase 3: dispatchEvent (ServiceNow/Glide buttons sometimes need this)
+            for ctx, label in frames_to_try:
+                try:
+                    if await _try_dispatch_click(ctx, label):
+                        return True
+                except Exception:
+                    continue
+
+            logger.warning("    [AddItem] All click strategies failed across all frames")
             return False
 
         try:
-            result = await asyncio.wait_for(try_click(), timeout=5.0)
+            result = await asyncio.wait_for(try_click(), timeout=8.0)
         except asyncio.TimeoutError:
-            logger.warning("_click_add_item timed out after 5s")
+            logger.warning("_click_add_item timed out after 8s")
             result = False
 
         if result:
@@ -596,10 +647,22 @@ class WebAutomationBot:
             # Click Add Item button
             try:
                 t0 = time.time()
+                # Brief pause for page to settle after availability check
+                await asyncio.sleep(0.3)
                 add_clicked = await self._click_add_item()
                 if not add_clicked:
-                    ctx = self._content_frame if self._content_frame else self.page
+                    # Take screenshot and dump page HTML for debugging
                     await self.page.screenshot(path="add_item_fail.png")
+                    # Try to capture what's on the page
+                    try:
+                        frames = self._get_search_frames()
+                        for ctx in frames:
+                            html = await ctx.evaluate("() => document.body ? document.body.innerHTML.substring(0, 2000) : ''")
+                            if 'Add Item' in html:
+                                logger.error(f"  'Add Item' text found in page HTML but click failed. HTML snippet: ...{html[max(0, html.index('Add Item')-100):html.index('Add Item')+100]}...")
+                                break
+                    except Exception:
+                        pass
                     raise Exception("Failed to click Add Item - see add_item_fail.png")
 
                 await self.page.wait_for_load_state('networkidle')
