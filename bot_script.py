@@ -882,7 +882,26 @@ class WebAutomationBot:
         """
         logger.info("Attempting password entry...")
 
-        # Strategy 1: fill()
+        # Strategy 0: Wait for field to be enabled (DOR disables it until terms scrolled)
+        try:
+            for sel in PASSWORD_SELECTORS:
+                try:
+                    el = await self.page.wait_for_selector(sel, timeout=3000)
+                    if el:
+                        # Wait up to 5s for the field to become enabled
+                        for _ in range(10):
+                            disabled = await el.evaluate("el => el.disabled || el.readOnly")
+                            if not disabled:
+                                break
+                            logger.info(f"  Password field {sel} is disabled, waiting...")
+                            await asyncio.sleep(0.5)
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # Strategy 1: fill() + dispatch events
         logger.info("  Strategy 1: fill()...")
         for sel in PASSWORD_SELECTORS:
             try:
@@ -890,8 +909,14 @@ class WebAutomationBot:
                 if el and await el.is_visible():
                     await el.scroll_into_view_if_needed()
                     await el.click()
+                    await asyncio.sleep(0.05)
                     await self.page.fill(sel, password)
-                    await asyncio.sleep(0.1)
+                    # Dispatch events the framework might need
+                    await el.evaluate("""el => {
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                    }""")
+                    await asyncio.sleep(0.15)
                     if await self._verify_password_entered():
                         logger.info(f"  Password entered via fill() on {sel}")
                         return True
@@ -1111,10 +1136,10 @@ class WebAutomationBot:
                 step += 1
 
                 try:
-                    await self.page.wait_for_load_state('networkidle', timeout=8000)
+                    await self.page.wait_for_load_state('domcontentloaded', timeout=5000)
                 except Exception:
                     pass
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
 
                 state = await self._detect_page_state()
                 logger.info(f"  Step {step}: Page state = {state}")
@@ -1180,30 +1205,86 @@ class WebAutomationBot:
             if not password:
                 raise Exception("SITE_PASSWORD not set")
 
-            max_password_attempts = 3
+            max_password_attempts = 5
             pw_filled = False
             for attempt in range(1, max_password_attempts + 1):
                 logger.info(f"Password attempt {attempt}/{max_password_attempts}...")
 
-                await self._scroll_to_bottom()
-                await asyncio.sleep(0.2)
-                await self._scroll_to_bottom()
+                # Aggressively scroll and dismiss "scroll for more" overlays
+                for _ in range(3):
+                    await self._scroll_to_bottom()
+                    await asyncio.sleep(0.15)
 
-                # Click "scroll for more" if present
+                # Click ALL "scroll for more" links (sometimes there are multiple)
                 try:
-                    scroll_more = await self.page.query_selector('a.ScrollForMoreLink, a[data-event="ScrollForMore"]')
-                    if scroll_more and await scroll_more.is_visible():
-                        await scroll_more.click()
-                        await asyncio.sleep(0.2)
+                    scroll_links = await self.page.query_selector_all(
+                        'a.ScrollForMoreLink, a[data-event="ScrollForMore"], '
+                        'a:has-text("scroll for more"), a:has-text("Scroll for More"), '
+                        'a:has-text("Click to view"), span:has-text("scroll")'
+                    )
+                    for link in scroll_links:
+                        try:
+                            if await link.is_visible():
+                                await link.click()
+                                logger.info("  Clicked 'scroll for more' link")
+                                await asyncio.sleep(0.3)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
+
+                # Scroll again after dismissing overlay
+                await self._scroll_to_bottom()
+                await asyncio.sleep(0.3)
+
+                # Also try scrolling within any scrollable containers (terms box)
+                try:
+                    await self.page.evaluate("""() => {
+                        // Find scrollable containers and scroll them to bottom
+                        const scrollables = document.querySelectorAll(
+                            'div[style*="overflow"], div.ScrollableArea, div.TermsContainer, '
+                            + 'div[class*="scroll"], div[class*="Scroll"], div[class*="terms"], '
+                            + 'div[class*="Terms"], textarea'
+                        );
+                        for (const el of scrollables) {
+                            if (el.scrollHeight > el.clientHeight) {
+                                el.scrollTop = el.scrollHeight;
+                            }
+                        }
+                        // Also scroll main containers
+                        const containers = document.querySelectorAll('.DocBody, .FormBody, [class*="Content"]');
+                        for (const el of containers) {
+                            if (el.scrollHeight > el.clientHeight) {
+                                el.scrollTop = el.scrollHeight;
+                            }
+                        }
+                    }""")
+                    await asyncio.sleep(0.3)
+                except Exception:
+                    pass
+
+                # Wait for password field to become visible/enabled after scroll
+                pw_visible = False
+                for wait_round in range(5):
+                    try:
+                        state = await self._detect_page_state()
+                        if state == 'password':
+                            pw_visible = True
+                            break
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.5)
+
+                if not pw_visible and attempt < max_password_attempts:
+                    logger.warning(f"  Password field not visible yet (attempt {attempt}), scrolling more...")
+                    continue
 
                 pw_filled = await self._fill_password_field(password)
                 if pw_filled:
                     break
 
                 logger.warning(f"  Password attempt {attempt} failed, recovering...")
-                await asyncio.sleep(1.0 * attempt)
+                await asyncio.sleep(0.5 + 0.5 * attempt)
                 try:
                     await self.page.mouse.click(10, 10)
                     await asyncio.sleep(0.2)
