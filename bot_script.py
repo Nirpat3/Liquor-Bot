@@ -490,7 +490,10 @@ class WebAutomationBot:
                 if el:
                     txt = (await el.text_content() or '0').replace(',', '').strip()
                     if txt.isdigit() and int(txt) == 0:
-                        logger.info(f"  x Item #{item_number} — available qty is 0, skipping instantly")
+                        import random
+                        delay = random.uniform(1.0, 3.0)
+                        logger.info(f"  x Item #{item_number} — available qty is 0, skipping (waiting {delay:.1f}s)")
+                        await asyncio.sleep(delay)
                         try:
                             search_input = await self._get_search_input()
                             await search_input.click()
