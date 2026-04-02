@@ -172,7 +172,6 @@ class WebAutomationBot:
 
         self.browser = await self.playwright.chromium.launch(
             headless=self.headless,
-            channel='chrome',
             slow_mo=0,
             args=['--start-maximized']
         )
@@ -871,178 +870,123 @@ class WebAutomationBot:
             return False
 
     async def _fill_password_field(self, password: str) -> bool:
-        """Enter confirmation password using multiple strategies with retry.
+        """Enter confirmation password — searches ALL frames.
 
-        Strategies:
-        1. fill() — same as login
+        The DOR checkout password field is often inside an iframe,
+        so we must search content frame + main page + all child frames.
+
+        Strategies per frame:
+        1. fill() with event dispatch
         2. JS focus + keyboard.type
         3. Playwright click + keyboard.type
-        4. Agentic discovery — scan DOM
-        5. Frame search
-        6. Tab-into-field fallback
         """
         logger.info("Attempting password entry...")
 
-        # Strategy 1: fill()
-        logger.info("  Strategy 1: fill()...")
-        for sel in PASSWORD_SELECTORS:
-            try:
-                el = await self.page.wait_for_selector(sel, timeout=2000)
-                if el and await el.is_visible():
-                    await el.scroll_into_view_if_needed()
-                    await el.click()
-                    await self.page.fill(sel, password)
-                    await asyncio.sleep(0.1)
-                    if await self._verify_password_entered():
-                        logger.info(f"  Password entered via fill() on {sel}")
-                        return True
-            except Exception:
-                continue
+        # Search all frames — content frame first (most likely location)
+        frames_to_try = self._get_search_frames()
 
-        # Strategy 2: JS focus + keyboard.type
-        logger.info("  Strategy 2: JS focus + keyboard.type...")
-        try:
-            focused = await self.page.evaluate("""() => {
-                const selectors = ['#Dn-k', 'input[name="Dn-k"]', 'input.DocControlPassword', 'input[type="password"]'];
-                for (const sel of selectors) {
-                    const el = document.querySelector(sel);
-                    if (el && el.offsetParent) {
-                        el.scrollIntoView({block: 'center'});
-                        el.focus();
-                        el.click();
-                        el.value = '';
-                        el.dispatchEvent(new Event('focus', {bubbles: true}));
-                        return sel;
-                    }
-                }
-                return null;
-            }""")
-            if focused:
-                await asyncio.sleep(0.05)
-                await self.page.keyboard.type(password, delay=10)
-                await asyncio.sleep(0.1)
-                if await self._verify_password_entered():
-                    logger.info(f"  Password entered via JS focus + keyboard.type on {focused}")
-                    return True
-        except Exception as e:
-            logger.warning(f"  Strategy 2 failed: {e}")
+        for frame in frames_to_try:
+            frame_name = getattr(frame, 'name', None) or ('main' if frame == self.page else 'frame')
 
-        # Strategy 3: Playwright click + keyboard.type
-        logger.info("  Strategy 3: Playwright click + keyboard.type...")
-        for sel in PASSWORD_SELECTORS:
-            try:
-                el = await self.page.wait_for_selector(sel, timeout=2000)
-                if el and await el.is_visible():
-                    await el.scroll_into_view_if_needed()
-                    await el.click(force=True)
-                    await asyncio.sleep(0.05)
-                    await self.page.keyboard.press('Control+a')
-                    await self.page.keyboard.press('Delete')
-                    await self.page.keyboard.type(password, delay=10)
-                    await asyncio.sleep(0.1)
-                    if await self._verify_password_entered():
-                        logger.info(f"  Password entered via click + keyboard.type on {sel}")
-                        return True
-            except Exception:
-                continue
-
-        # Strategy 4: Agentic discovery
-        logger.info("  Strategy 4: Agentic discovery...")
-        discovered = await self._discover_password_inputs()
-        if discovered:
-            logger.info(f"  Discovered {len(discovered)} password-like input(s)")
-            for field_info in discovered:
-                sel = field_info.get('selector', '')
-                if not sel or sel.startswith('input.'):
-                    if field_info.get('id'):
-                        sel = f"input#{field_info['id']}"
-                    elif field_info.get('name'):
-                        sel = f"input[name=\"{field_info['name']}\"]"
-                    else:
-                        continue
+            # Strategy 1: fill()
+            for sel in PASSWORD_SELECTORS:
                 try:
-                    el = await self.page.wait_for_selector(sel, timeout=2000)
+                    el = await frame.wait_for_selector(sel, timeout=1500)
                     if el and await el.is_visible():
+                        logger.info(f"  Found password field {sel} in {frame_name}")
                         await el.scroll_into_view_if_needed()
                         await el.click()
-                        await self.page.fill(sel, password)
+                        await asyncio.sleep(0.05)
+                        await frame.fill(sel, password)
+                        await el.evaluate("""el => {
+                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                            el.dispatchEvent(new Event('change', {bubbles: true}));
+                        }""")
                         await asyncio.sleep(0.1)
-                        if await self._verify_password_entered():
-                            logger.info(f"  Password entered via discovered {sel}")
-                            return True
-                        # Try keyboard.type
-                        await el.click(force=True)
-                        await self.page.keyboard.press('Control+a')
-                        await self.page.keyboard.press('Delete')
-                        await self.page.keyboard.type(password, delay=10)
-                        await asyncio.sleep(0.1)
-                        if await self._verify_password_entered():
+                        if await self._verify_password_entered(ctx=frame):
+                            logger.info(f"  Password entered via fill() on {sel} in {frame_name}")
                             return True
                 except Exception:
                     continue
 
-        # Strategy 5: Search all frames
-        logger.info("  Strategy 5: Searching all frames...")
-        for fr in list(self.page.frames):
-            if fr == self.page.main_frame:
-                continue
-            frame_discovered = await self._discover_password_inputs(ctx=fr)
-            for sel in PASSWORD_SELECTORS + [d.get('selector', '') for d in frame_discovered]:
-                if not sel:
-                    continue
+            # Strategy 2: JS focus + keyboard.type
+            try:
+                focused = await frame.evaluate("""() => {
+                    const selectors = ['#Dn-k', 'input[name="Dn-k"]', 'input.DocControlPassword', 'input[type="password"]'];
+                    for (const sel of selectors) {
+                        const el = document.querySelector(sel);
+                        if (el && el.offsetParent) {
+                            el.scrollIntoView({block: 'center'});
+                            el.focus();
+                            el.click();
+                            el.value = '';
+                            el.dispatchEvent(new Event('focus', {bubbles: true}));
+                            return sel;
+                        }
+                    }
+                    return null;
+                }""")
+                if focused:
+                    logger.info(f"  JS-focused {focused} in {frame_name}")
+                    await asyncio.sleep(0.05)
+                    await self.page.keyboard.type(password, delay=10)
+                    await asyncio.sleep(0.1)
+                    if await self._verify_password_entered(ctx=frame):
+                        logger.info(f"  Password entered via JS focus + keyboard.type on {focused}")
+                        return True
+            except Exception:
+                pass
+
+            # Strategy 3: Playwright click + keyboard.type
+            for sel in PASSWORD_SELECTORS:
                 try:
-                    el = await fr.wait_for_selector(sel, timeout=1500)
+                    el = await frame.wait_for_selector(sel, timeout=1500)
                     if el and await el.is_visible():
                         await el.scroll_into_view_if_needed()
-                        try:
-                            await el.click()
-                            await fr.fill(sel, password)
-                            await asyncio.sleep(0.1)
-                            if await self._verify_password_entered(ctx=fr):
-                                logger.info(f"  Password entered via frame fill() on {sel}")
-                                return True
-                        except Exception:
-                            pass
                         await el.click(force=True)
                         await asyncio.sleep(0.05)
                         await self.page.keyboard.press('Control+a')
                         await self.page.keyboard.press('Delete')
                         await self.page.keyboard.type(password, delay=10)
                         await asyncio.sleep(0.1)
-                        if await self._verify_password_entered(ctx=fr):
-                            logger.info(f"  Password entered via frame keyboard.type on {sel}")
+                        if await self._verify_password_entered(ctx=frame):
+                            logger.info(f"  Password entered via click + keyboard.type on {sel}")
                             return True
                 except Exception:
                     continue
 
-        # Strategy 6: Tab fallback
-        logger.info("  Strategy 6: Tab into field fallback...")
+        # Tab fallback — try tabbing into the field
+        logger.info("  Tab fallback...")
         try:
             await self.page.keyboard.press('Tab')
             await asyncio.sleep(0.05)
             await self.page.keyboard.type(password, delay=10)
             await asyncio.sleep(0.1)
-            if await self._verify_password_entered():
-                logger.info("  Password entered via Tab + keyboard.type")
-                return True
+            for ctx in self._get_search_frames():
+                if await self._verify_password_entered(ctx=ctx):
+                    logger.info("  Password entered via Tab + keyboard.type")
+                    return True
         except Exception as e:
             logger.warning(f"  Tab fallback failed: {e}")
 
         # All failed — diagnostics
         logger.error("All password entry strategies failed. Running diagnostics...")
         await self._debug_page("password_fail.png")
-        try:
-            all_inputs = await self.page.evaluate("""() => {
-                return Array.from(document.querySelectorAll('input')).filter(e => e.offsetParent).map(e => ({
-                    id: e.id, name: e.name, type: e.type,
-                    class: e.className.substring(0, 60),
-                    ariaLabel: e.getAttribute('aria-label') || '',
-                    placeholder: e.placeholder || ''
-                }));
-            }""")
-            logger.info(f"  Visible inputs on page: {all_inputs}")
-        except Exception:
-            pass
+        # Log all visible inputs across all frames for debugging
+        for ctx in self._get_search_frames():
+            try:
+                all_inputs = await ctx.evaluate("""() => {
+                    return Array.from(document.querySelectorAll('input')).filter(e => e.offsetParent).map(e => ({
+                        id: e.id, name: e.name, type: e.type,
+                        class: e.className.substring(0, 60),
+                        ariaLabel: e.getAttribute('aria-label') || '',
+                        placeholder: e.placeholder || ''
+                    }));
+                }""")
+                if all_inputs:
+                    logger.info(f"  Visible inputs in frame: {all_inputs}")
+            except Exception:
+                pass
 
         return False
 
@@ -1057,40 +1001,47 @@ class WebAutomationBot:
         return False
 
     async def _detect_page_state(self) -> str:
-        """Fast JS-based page state detection.
+        """Fast JS-based page state detection — searches all frames.
         Returns: 'next', 'submit', 'password', 'ach', 'session_expired', 'unknown'"""
-        try:
-            return await self.page.evaluate("""() => {
-                const body = document.body ? document.body.textContent || '' : '';
-                if (body.includes('session has expired') || body.includes('Start Over')) return 'session_expired';
+        detect_js = """() => {
+            const body = document.body ? document.body.textContent || '' : '';
+            if (body.includes('session has expired') || body.includes('Start Over')) return 'session_expired';
 
-                const pwSelectors = ['#Dn-k', 'input[name="Dn-k"]', 'input.DocControlPassword', 'input[type="password"]'];
-                for (const sel of pwSelectors) {
-                    const el = document.querySelector(sel);
-                    if (el && el.offsetParent) return 'password';
-                }
+            const pwSelectors = ['#Dn-k', 'input[name="Dn-k"]', 'input.DocControlPassword', 'input[type="password"]'];
+            for (const sel of pwSelectors) {
+                const el = document.querySelector(sel);
+                if (el && el.offsetParent) return 'password';
+            }
 
-                const allSpans = document.querySelectorAll('span.ActionButtonCaptionText, span');
-                let hasNext = false, hasSubmit = false;
-                for (const s of allSpans) {
-                    const t = (s.textContent || '').trim();
-                    if (t === 'Next' && s.offsetParent) hasNext = true;
-                    if (t === 'Submit' && s.offsetParent) hasSubmit = true;
-                }
+            const allSpans = document.querySelectorAll('span.ActionButtonCaptionText, span');
+            let hasNext = false, hasSubmit = false;
+            for (const s of allSpans) {
+                const t = (s.textContent || '').trim();
+                if (t === 'Next' && s.offsetParent) hasNext = true;
+                if (t === 'Submit' && s.offsetParent) hasSubmit = true;
+            }
 
-                if (body.includes('ACH Debit Bank')) {
-                    if (hasNext) return 'ach_with_next';
-                    return 'ach';
-                }
+            if (body.includes('ACH Debit Bank')) {
+                if (hasNext) return 'ach_with_next';
+                return 'ach';
+            }
 
-                if (hasSubmit && !hasNext) return 'submit';
-                if (hasNext) return 'next';
-                if (hasSubmit) return 'submit';
+            if (hasSubmit && !hasNext) return 'submit';
+            if (hasNext) return 'next';
+            if (hasSubmit) return 'submit';
 
-                return 'unknown';
-            }""")
-        except Exception:
-            return 'unknown'
+            return 'unknown';
+        }"""
+
+        # Search all frames (content frame first, then main page, then others)
+        for ctx in self._get_search_frames():
+            try:
+                result = await ctx.evaluate(detect_js)
+                if result != 'unknown':
+                    return result
+            except Exception:
+                continue
+        return 'unknown'
 
     async def submit_order(self):
         """Complete checkout and submit the full order.
@@ -1111,11 +1062,13 @@ class WebAutomationBot:
             while step < max_steps:
                 step += 1
 
+                # Wait for page to be ready (domcontentloaded is fast, networkidle hangs on DOR)
                 try:
-                    await self.page.wait_for_load_state('networkidle', timeout=8000)
+                    await self.page.wait_for_load_state('domcontentloaded', timeout=5000)
                 except Exception:
                     pass
-                await asyncio.sleep(0.3)
+                # Brief settle for dynamic content
+                await asyncio.sleep(0.5)
 
                 state = await self._detect_page_state()
                 logger.info(f"  Step {step}: Page state = {state}")
