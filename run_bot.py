@@ -9,7 +9,7 @@ import subprocess
 import os
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 def check_requirements():
     """Check if required packages are installed"""

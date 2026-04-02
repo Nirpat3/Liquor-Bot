@@ -636,16 +636,12 @@ class BotGUI:
 
                     items_found, total_qty_added = await bot.check_and_process_items(items)
 
-                    if items_found and total_qty_added >= 10:
+                    if items_found:
                         item_numbers = [str(item['item_number']) for item in items_found]
                         logging.info(f"Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
                         await bot.submit_order()
                         update_csv_file('orders.csv', items)
                         logging.info("Immediately checking for remaining items...")
-                    elif items_found and total_qty_added < 10:
-                        logging.warning(f"Need min 10 qty total (have {total_qty_added}). Reverting - will retry.")
-                        for item in items_found:
-                            item['order_filled'] = ''
                     else:
                         logging.info("No items available. Checking again in 1 second...")
                         await asyncio.sleep(1)
