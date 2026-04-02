@@ -483,28 +483,6 @@ class WebAutomationBot:
             await self.page.wait_for_load_state('networkidle')
             await asyncio.sleep(0.5)  # wait for search results to render
 
-            # QUICK QTY CHECK: if available qty is 0, skip immediately (no 2s wait)
-            ctx_quick = self._content_frame if self._content_frame else self.page
-            try:
-                el = await ctx_quick.query_selector('span[id="fgvt_Dm-m-1"]') or await ctx_quick.query_selector('span[id^="fgvt_Dm"]') or await ctx_quick.query_selector('span[id^="fgvt_"]')
-                if el:
-                    txt = (await el.text_content() or '0').replace(',', '').strip()
-                    if txt.isdigit() and int(txt) == 0:
-                        import random
-                        delay = random.uniform(1.0, 3.0)
-                        logger.info(f"  x Item #{item_number} — available qty is 0, skipping (waiting {delay:.1f}s)")
-                        await asyncio.sleep(delay)
-                        try:
-                            search_input = await self._get_search_input()
-                            await search_input.click()
-                            await search_input.press('Control+a')
-                            await search_input.press('Backspace')
-                        except Exception:
-                            pass
-                        continue
-            except Exception:
-                pass
-
             # check if Add Item button appears (indicates item is available)
             try:
                 logger.info(f"  [STEP 1] Looking for Add Item button...")
