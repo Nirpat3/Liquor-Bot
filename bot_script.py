@@ -385,8 +385,9 @@ class WebAutomationBot:
                 continue
         raise Exception("Could not find item search input")
 
-    async def _click_add_item(self):
-        """Click Add Item button. Tries locator-based, JS-based, then dispatchEvent approaches."""
+    async def _click_add_item(self, hint_frame=None):
+        """Click Add Item button. When hint_frame is provided (from availability check),
+        tries that frame first for fastest path. Falls back to full search."""
 
         async def _try_locator_click(frame, label=""):
             """Try clicking Add Item via Playwright locators in a given frame."""
@@ -454,7 +455,27 @@ class WebAutomationBot:
             return False
 
         async def try_click():
-            # Build frame list with labels for logging
+            # === FAST PATH: Try hint_frame first (same frame where qty was found) ===
+            if hint_frame:
+                logger.info(f"    [AddItem] Trying hint frame first (same frame where qty detected)...")
+                try:
+                    if await _try_locator_click(hint_frame, "hint_frame"):
+                        return True
+                except Exception:
+                    pass
+                try:
+                    if await _try_js_click(hint_frame, "hint_frame"):
+                        return True
+                except Exception:
+                    pass
+                try:
+                    if await _try_dispatch_click(hint_frame, "hint_frame"):
+                        return True
+                except Exception:
+                    pass
+                logger.info(f"    [AddItem] Hint frame didn't work, falling back to full search...")
+
+            # === FULL SEARCH: Build frame list and try all strategies ===
             frames_to_try = []
             if self._content_frame:
                 frames_to_try.append((self._content_frame, "content_frame"))
@@ -465,7 +486,11 @@ class WebAutomationBot:
                     if not already:
                         frames_to_try.append((fr, f"frame_{i}"))
 
-            logger.info(f"    [AddItem] Searching {len(frames_to_try)} frames...")
+            # Skip hint_frame in full search since we already tried it
+            if hint_frame:
+                frames_to_try = [(f, l) for f, l in frames_to_try if f != hint_frame]
+
+            logger.info(f"    [AddItem] Searching {len(frames_to_try)} remaining frames...")
 
             # Wait briefly for button to become interactive after search results load
             await asyncio.sleep(0.3)
@@ -514,6 +539,7 @@ class WebAutomationBot:
             available: bool - whether item can be added
             quantity: int - available quantity (0 if not available)
             reason: str - why item is not available (if not available)
+            frame: the frame where qty/button was found (for direct clicking)
         """
         frames = self._get_search_frames()
 
@@ -526,9 +552,9 @@ class WebAutomationBot:
                         available_text = await el.text_content() or '0'
                         available_quantity = int(available_text.replace(',', '').strip())
                         if available_quantity == 0:
-                            return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
+                            return {'available': False, 'quantity': 0, 'reason': 'available qty is 0', 'frame': None}
                         logger.info(f"    Found qty {available_quantity} via {sel}")
-                        return {'available': True, 'quantity': available_quantity, 'reason': ''}
+                        return {'available': True, 'quantity': available_quantity, 'reason': '', 'frame': ctx}
                 except Exception:
                     continue
 
@@ -541,9 +567,9 @@ class WebAutomationBot:
                         available_text = await el.text_content() or '0'
                         available_quantity = int(available_text.replace(',', '').strip())
                         if available_quantity == 0:
-                            return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
+                            return {'available': False, 'quantity': 0, 'reason': 'available qty is 0', 'frame': None}
                         logger.info(f"    Found qty {available_quantity} via {sel} (waited)")
-                        return {'available': True, 'quantity': available_quantity, 'reason': ''}
+                        return {'available': True, 'quantity': available_quantity, 'reason': '', 'frame': ctx}
                 except Exception:
                     continue
 
@@ -554,11 +580,11 @@ class WebAutomationBot:
                     el = await ctx.query_selector(sel)
                     if el and await el.is_visible():
                         logger.info(f"    Qty selector not found but Add Item button visible — proceeding")
-                        return {'available': True, 'quantity': -1, 'reason': ''}
+                        return {'available': True, 'quantity': -1, 'reason': '', 'frame': ctx}
                 except Exception:
                     continue
 
-        return {'available': False, 'quantity': 0, 'reason': 'qty element not found'}
+        return {'available': False, 'quantity': 0, 'reason': 'qty element not found', 'frame': None}
 
     def _get_search_frames(self):
         """Get frames to search in priority order."""
@@ -633,6 +659,7 @@ class WebAutomationBot:
             # Item is available - process it
             logger.info(f"  + Item #{item_number} is AVAILABLE!")
             available_quantity = availability['quantity']
+            found_frame = availability.get('frame')  # Frame where qty/button was found
 
             backorder_qty = 0
             if available_quantity > 0:
@@ -644,12 +671,12 @@ class WebAutomationBot:
                 else:
                     logger.info(f"    Using requested quantity: {quantity}")
 
-            # Click Add Item button
+            # Click Add Item button — pass the frame where we found availability
             try:
                 t0 = time.time()
                 # Brief pause for page to settle after availability check
                 await asyncio.sleep(0.3)
-                add_clicked = await self._click_add_item()
+                add_clicked = await self._click_add_item(hint_frame=found_frame)
                 if not add_clicked:
                     # Take screenshot and dump page HTML for debugging
                     await self.page.screenshot(path="add_item_fail.png")
