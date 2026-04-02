@@ -1503,7 +1503,7 @@ def run_bot_thread():
                         items_found, total_qty_added = await bot.check_and_process_items(items)
                         consecutive_errors = 0
 
-                        if items_found:
+                        if items_found and total_qty_added >= 10:
                             item_numbers = [str(i['item_number']) for i in items_found]
                             logging.info(f"Found {len(items_found)} items, {total_qty_added} total qty: {', '.join(item_numbers)}")
                             await bot.submit_order()
@@ -1511,6 +1511,10 @@ def run_bot_thread():
                             on_item_entry = False
                             if not [i for i in items if i.get('order_filled', '').lower() != 'yes']:
                                 logging.info("All items filled!")
+                        elif items_found and total_qty_added < 10:
+                            # Keep items in cart — don't revert. Wait for more to become available.
+                            logging.warning(f"Have {total_qty_added} qty in cart (need 10 min). Keeping cart, re-checking in 30s...")
+                            await asyncio.sleep(30)
                         else:
                             logging.info("No items available. Re-checking...")
                             await asyncio.sleep(1)
