@@ -517,8 +517,12 @@ class WebAutomationBot:
             t_item_start = time.time()
             trace = {'item': item_number, 'steps': {}, 'result': '', 'total_ms': 0}
 
-            # Enter item number
-            logger.info(f"Checking item #{item_number}...")
+            # Human-like delay between searches (1-3s random)
+            import random
+            delay = random.uniform(1.0, 3.0)
+            logger.info(f"Checking item #{item_number}... (waiting {delay:.1f}s)")
+            await asyncio.sleep(delay)
+
             t0 = time.time()
             search_input = await self._get_search_input()
             await search_input.click()
