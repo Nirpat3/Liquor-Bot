@@ -508,7 +508,7 @@ HTML_TEMPLATE = '''
                             <td>${item.size || ''}</td>
                             <td>${item.units || ''}</td>
                             <td>${item.quantity}</td>
-                            <td>${item.order_filled === 'yes' ? '✅ Completed' : '⏳ Pending'}</td>
+                            <td>${item.order_filled === 'yes' ? '✅ Completed' : item.order_filled === 'backorder' ? '📦 Backorder' : '⏳ Pending'}</td>
                             <td>
                                 <button class="danger" onclick="deleteItem(${index})">Delete</button>
                             </td>

@@ -568,12 +568,13 @@ class WebAutomationBot:
             logger.info(f"  + Item #{item_number} is AVAILABLE!")
             available_quantity = availability['quantity']
 
+            backorder_qty = 0
             if available_quantity > 0:
                 logger.info(f"    Available quantity: {available_quantity}")
                 if quantity > available_quantity:
-                    adjusted_quantity = max(1, int(available_quantity * 0.7))
-                    logger.info(f"    Adjusting quantity from {quantity} to {adjusted_quantity} (70% of available)")
-                    quantity = adjusted_quantity
+                    backorder_qty = quantity - available_quantity
+                    logger.info(f"    Ordering {available_quantity} of {quantity} requested ({backorder_qty} → backorder)")
+                    quantity = available_quantity
                 else:
                     logger.info(f"    Using requested quantity: {quantity}")
 
@@ -597,9 +598,25 @@ class WebAutomationBot:
 
                 # Mark item as processed
                 item['order_filled'] = 'yes'
+                item['quantity'] = quantity  # update to actual qty ordered
                 items_found.append(item)
                 total_qty_added += quantity
-                trace['result'] = f"ADDED {quantity} units"
+
+                # Create backorder entry for remaining qty
+                if backorder_qty > 0:
+                    backorder_item = {
+                        'item_number': item_number,
+                        'quantity': backorder_qty,
+                        'name': item.get('name', ''),
+                        'size': item.get('size', ''),
+                        'units': item.get('units', ''),
+                        'order_filled': 'backorder'
+                    }
+                    items.append(backorder_item)
+                    logger.info(f"    + Backorder created: {backorder_qty} units for item #{item_number}")
+                    trace['result'] = f"ADDED {quantity} units (+{backorder_qty} backorder)"
+                else:
+                    trace['result'] = f"ADDED {quantity} units"
                 logger.info(f"    + Added to cart: {quantity} units (total: {total_qty_added})")
 
             except Exception as e:
