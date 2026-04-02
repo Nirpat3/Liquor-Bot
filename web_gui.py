@@ -1509,8 +1509,14 @@ def run_bot_thread():
                             await bot.submit_order()
                             update_csv_file('orders.csv', items)
                             on_item_entry = False
-                            if not [i for i in items if i.get('order_filled', '').lower() != 'yes']:
+                            remaining = [i for i in items if i.get('order_filled', '').lower() not in ('yes',)]
+                            if not remaining:
                                 logging.info("All items filled!")
+                            else:
+                                logging.info(f"{len(remaining)} items remaining — restarting with manual entry...")
+                                await asyncio.sleep(2)
+                                await bot.start_order()
+                                on_item_entry = True
                         elif items_found and total_qty_added < 10:
                             # Keep items in cart — don't revert. Wait for more to become available.
                             logging.warning(f"Have {total_qty_added} qty in cart (need 10 min). Keeping cart, re-checking in 30s...")
