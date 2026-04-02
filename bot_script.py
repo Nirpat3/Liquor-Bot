@@ -118,7 +118,11 @@ SEARCH_INPUT_SELECTORS = [
     'input[id^="Dm"]',
     'input[type="text"]',
 ]
-QTY_AVAILABLE_SELECTOR = 'span[id="fgvt_Dm-m-1"]'
+QTY_AVAILABLE_SELECTORS = [
+    'span[id="fgvt_Dm-m-1"]',
+    'span[id^="fgvt_Dm"]',
+    'span[id^="fgvt_"]',
+]
 
 
 class WebAutomationBot:
@@ -460,33 +464,49 @@ class WebAutomationBot:
             quantity: int - available quantity (0 if not available)
             reason: str - why item is not available (if not available)
         """
-        ctx = self._content_frame if self._content_frame else self.page
+        frames = self._get_search_frames()
 
-        # Fast check: look for qty element immediately (no waiting)
-        try:
-            el = await ctx.query_selector(QTY_AVAILABLE_SELECTOR)
-            if el:
-                available_text = await el.text_content() or '0'
-                available_quantity = int(available_text.replace(',', ''))
-                if available_quantity == 0:
-                    return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
-                return {'available': True, 'quantity': available_quantity, 'reason': ''}
-        except Exception:
-            pass
+        # Try each selector across all frames — fast check first (no wait)
+        for ctx in frames:
+            for sel in QTY_AVAILABLE_SELECTORS:
+                try:
+                    el = await ctx.query_selector(sel)
+                    if el:
+                        available_text = await el.text_content() or '0'
+                        available_quantity = int(available_text.replace(',', '').strip())
+                        if available_quantity == 0:
+                            return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
+                        logger.info(f"    Found qty {available_quantity} via {sel}")
+                        return {'available': True, 'quantity': available_quantity, 'reason': ''}
+                except Exception:
+                    continue
 
-        # Brief wait in case page is still rendering (max 500ms)
-        try:
-            el = await ctx.wait_for_selector(QTY_AVAILABLE_SELECTOR, timeout=500)
-            if el:
-                available_text = await el.text_content() or '0'
-                available_quantity = int(available_text.replace(',', ''))
-                if available_quantity == 0:
-                    return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
-                return {'available': True, 'quantity': available_quantity, 'reason': ''}
-        except Exception:
-            pass
+        # Brief wait in case page is still rendering (max 500ms per selector)
+        for ctx in frames:
+            for sel in QTY_AVAILABLE_SELECTORS:
+                try:
+                    el = await ctx.wait_for_selector(sel, timeout=500)
+                    if el:
+                        available_text = await el.text_content() or '0'
+                        available_quantity = int(available_text.replace(',', '').strip())
+                        if available_quantity == 0:
+                            return {'available': False, 'quantity': 0, 'reason': 'available qty is 0'}
+                        logger.info(f"    Found qty {available_quantity} via {sel} (waited)")
+                        return {'available': True, 'quantity': available_quantity, 'reason': ''}
+                except Exception:
+                    continue
 
-        # Could not find qty element — item not loaded or doesn't exist
+        # Last resort: check if Add Item button is visible (item exists but qty selector unknown)
+        for ctx in frames:
+            for sel in ADD_ITEM_SELECTORS:
+                try:
+                    el = await ctx.query_selector(sel)
+                    if el and await el.is_visible():
+                        logger.info(f"    Qty selector not found but Add Item button visible — proceeding")
+                        return {'available': True, 'quantity': -1, 'reason': ''}
+                except Exception:
+                    continue
+
         return {'available': False, 'quantity': 0, 'reason': 'qty element not found'}
 
     def _get_search_frames(self):
